@@ -1,9 +1,14 @@
 import asyncio
 import logging
+import sys
+from pathlib import Path
 
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
+
+if __package__ in (None, ""):
+    sys.path.append(str(Path(__file__).resolve().parents[1]))
 
 from bot.config import load_settings
 from bot.handlers import setup_routers
@@ -28,4 +33,3 @@ async def main() -> None:
 
 if __name__ == "__main__":
     asyncio.run(main())
-

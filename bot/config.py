@@ -7,6 +7,8 @@ from dotenv import load_dotenv
 @dataclass
 class Settings:
     bot_token: str
+    openrouter_api_key: str
+    openrouter_model: str
 
 
 def load_settings() -> Settings:
@@ -14,5 +16,9 @@ def load_settings() -> Settings:
     token = os.getenv("BOT_TOKEN", "").strip()
     if not token:
         raise ValueError("BOT_TOKEN is not set. Put it in .env file.")
-    return Settings(bot_token=token)
-
+    return Settings(
+        bot_token=token,
+        openrouter_api_key=os.getenv("OPENROUTER_API_KEY", "").strip(),
+        openrouter_model=os.getenv("OPENROUTER_MODEL", "openai/gpt-4o-mini").strip()
+        or "openai/gpt-4o-mini",
+    )
