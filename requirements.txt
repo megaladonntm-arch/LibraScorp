@@ -4,4 +4,4 @@ openai==2.21.0
 python-pptx==1.0.2
 Pillow==10.1.0
 SQLAlchemy==2.0.37
-aiosqlite==3.0.0
+aiosqlite=0.22.0
