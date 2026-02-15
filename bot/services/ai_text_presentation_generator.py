@@ -9,16 +9,17 @@ from typing import Any
 
 from openai import AsyncOpenAI
 
+from bot.config import load_settings
+
 logger = logging.getLogger(__name__)
+settings = load_settings()
 
 ASSETS_DIR = Path(__file__).resolve().parents[2] / "assets_pdf"
-OPENROUTER_API_KEY = "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"
-MODEL_CANDIDATES = (
-    "openai/gpt-oss-120b:free",
-    "deepseek/deepseek-chat-v3-0324:free",
-    "meta-llama/llama-3.3-70b-instruct:free",
-    "openai/gpt-4o-mini",
-)
+LANGUAGE_NAMES = {
+    "ru": "Russian",
+    "en": "English",
+    "uz": "Uzbek",
+}
 
 
 @dataclass
@@ -77,83 +78,160 @@ def _extract_json(payload: str) -> Any:
         raise
 
 
-def _fallback_slides(topic: str, slide_count: int) -> list[SlideContent]:
+def _normalize_language_code(lang: str | None) -> str:
+    return lang if lang in LANGUAGE_NAMES else "ru"
+
+
+def _fallback_slides(topic: str, slide_count: int, lang: str) -> list[SlideContent]:
+    if lang == "en":
+        intro_title = f"{topic}: Overview"
+        intro_bullets = [
+            "Context and relevance of the topic.",
+            "Key questions this presentation answers.",
+            "Expected practical outcomes.",
+        ]
+        body_title = f"{topic}: Slide"
+        body_bullets = [
+            "Core idea in one sentence.",
+            "Concrete example, fact, or scenario.",
+            "Practical takeaway for the audience.",
+        ]
+        end_title = "Conclusion"
+        end_bullets = [
+            "Main conclusions and priorities.",
+            "Recommended next steps.",
+            "Short final summary.",
+        ]
+    elif lang == "uz":
+        intro_title = f"{topic}: Kirish"
+        intro_bullets = [
+            "Mavzuning mazmuni va dolzarbligi.",
+            "Taqdimot javob beradigan asosiy savollar.",
+            "Amaliy natijalar.",
+        ]
+        body_title = f"{topic}: Slayd"
+        body_bullets = [
+            "Asosiy g'oya bir jumlada.",
+            "Aniq misol yoki fakt.",
+            "Tinglovchi uchun amaliy xulosa.",
+        ]
+        end_title = "Xulosa"
+        end_bullets = [
+            "Asosiy xulosalar va ustuvor yo'nalishlar.",
+            "Keyingi amaliy qadamlar.",
+            "Qisqa yakuniy fikr.",
+        ]
+    else:
+        intro_title = f"{topic}: обзор"
+        intro_bullets = [
+            "Контекст темы и её актуальность.",
+            "На какие вопросы ответит презентация.",
+            "Практический результат для аудитории.",
+        ]
+        body_title = f"{topic}: слайд"
+        body_bullets = [
+            "Ключевая мысль одним тезисом.",
+            "Конкретный пример или факт.",
+            "Практический вывод для слушателя.",
+        ]
+        end_title = "Заключение"
+        end_bullets = [
+            "Главные выводы и приоритеты.",
+            "Рекомендуемые следующие шаги.",
+            "Короткий финальный итог.",
+        ]
+
     slides: list[SlideContent] = []
     for i in range(1, slide_count + 1):
         if i == 1:
             slides.append(
                 SlideContent(
-                    title=f"{topic}: обзор",
-                    bullets=[
-                        "Вводная часть по теме.",
-                        "Почему это важно сейчас.",
-                        "Что разберем в презентации.",
-                    ],
+                    title=intro_title,
+                    bullets=intro_bullets,
                 )
             )
         elif i == slide_count:
             slides.append(
                 SlideContent(
-                    title="Заключение",
-                    bullets=[
-                        "Ключевые выводы.",
-                        "Практические шаги.",
-                        "Итоговая рекомендация.",
-                    ],
+                    title=end_title,
+                    bullets=end_bullets,
                 )
             )
         else:
             slides.append(
                 SlideContent(
-                    title=f"{topic}: слайд {i}",
-                    bullets=[
-                        "Главная идея слайда.",
-                        "Подтверждающие факты или пример.",
-                        "Короткий промежуточный вывод.",
-                    ],
+                    title=f"{body_title} {i}",
+                    bullets=body_bullets,
                 )
             )
     return slides
 
 
-def _normalize_slides(topic: str, slide_count: int, raw: Any) -> list[SlideContent]:
+def _normalize_slides(topic: str, slide_count: int, raw: Any, lang: str) -> list[SlideContent]:
     if isinstance(raw, dict):
         raw = raw.get("slides")
 
     if not isinstance(raw, list):
-        return _fallback_slides(topic, slide_count)
+        return _fallback_slides(topic, slide_count, lang)
 
     slides: list[SlideContent] = []
     for item in raw[:slide_count]:
         if not isinstance(item, dict):
             continue
-        title = str(item.get("title", "")).strip() or "Без названия"
+        title = str(item.get("title", "")).strip()
+        if not title:
+            if lang == "en":
+                title = "Untitled"
+            elif lang == "uz":
+                title = "Nomsiz"
+            else:
+                title = "Без названия"
         bullets_raw = item.get("bullets", [])
         if not isinstance(bullets_raw, list):
             bullets_raw = []
-        bullets = [str(x).strip() for x in bullets_raw if str(x).strip()]
+        bullets: list[str] = []
+        seen: set[str] = set()
+        for value in bullets_raw:
+            bullet = re.sub(r"\s+", " ", str(value).strip())
+            bullet = re.sub(r"^[\-\*\d\.\)\s]+", "", bullet).strip()
+            if not bullet:
+                continue
+            key = bullet.casefold()
+            if key in seen:
+                continue
+            seen.add(key)
+            bullets.append(bullet[:220])
         if not bullets:
-            bullets = ["Главная мысль слайда."]
+            if lang == "en":
+                bullets = ["Main point of this slide."]
+            elif lang == "uz":
+                bullets = ["Ushbu slaydning asosiy g'oyasi."]
+            else:
+                bullets = ["Главная мысль слайда."]
         slides.append(SlideContent(title=title, bullets=bullets[:5]))
 
     if len(slides) < slide_count:
-        fallback = _fallback_slides(topic, slide_count)
+        fallback = _fallback_slides(topic, slide_count, lang)
         slides.extend(fallback[len(slides):slide_count])
 
     return slides[:slide_count]
 
 
-async def _generate_async(topic: str, slide_count: int, template_type: int) -> list[SlideContent]:
-    api_key = OPENROUTER_API_KEY.strip()
+async def _generate_async(topic: str, slide_count: int, template_type: int, lang: str) -> list[SlideContent]:
+    api_key = settings.openrouter_api_key.strip()
     if not api_key:
-        logger.error("OPENROUTER_API_KEY is empty")
-        return _fallback_slides(topic, slide_count)
+        logger.error("OPENROUTER_API_KEY is empty in .env")
+        return _fallback_slides(topic, slide_count, lang)
+
+    language_code = _normalize_language_code(lang)
+    language_name = LANGUAGE_NAMES[language_code]
 
     prompt = (
-        "Generate slide content in Russian. Return JSON only.\n"
+        "Create high-quality slide content for a business presentation. Return strict JSON only.\n"
         f"Topic: {topic}\n"
         f"Slide count: {slide_count}\n"
         f"Template type: {template_type}\n\n"
+        f"Output language: {language_name} (code: {language_code})\n\n"
         "Format:\n"
         "{\n"
         '  "slides": [\n'
@@ -163,25 +241,29 @@ async def _generate_async(topic: str, slide_count: int, template_type: int) -> l
         "Rules:\n"
         "- Exactly the requested slide count.\n"
         "- 3 to 5 concise bullets per slide.\n"
-        "- Content must be specific, no generic filler."
+        "- Slide 1 is an engaging introduction, final slide is conclusion/next steps.\n"
+        "- Each bullet should be specific and actionable, avoid generic filler.\n"
+        "- Prefer concrete facts, realistic examples, metrics, or practical recommendations.\n"
+        "- Avoid repeating the same bullet wording across slides.\n"
+        "- No markdown, no code fences, no commentary outside JSON."
     )
 
     client = AsyncOpenAI(base_url="https://openrouter.ai/api/v1", api_key=api_key)
 
     last_error: Exception | None = None
-    for model in MODEL_CANDIDATES:
+    for model in settings.openrouter_models:
         try:
             response = await client.chat.completions.create(
                 model=model,
                 messages=[
-                    {"role": "system", "content": "You are a presentation writing expert."},
+                    {"role": "system", "content": "You are a senior presentation copywriter. You produce clear, specific, audience-ready slide text."},
                     {"role": "user", "content": prompt},
                 ],
-                temperature=0.7,
+                temperature=0.45,
             )
             content = response.choices[0].message.content or ""
             parsed = _extract_json(content)
-            slides = _normalize_slides(topic, slide_count, parsed)
+            slides = _normalize_slides(topic, slide_count, parsed, language_code)
             logger.info("Slides generated via model: %s", model)
             return slides
         except Exception as exc:
@@ -189,7 +271,7 @@ async def _generate_async(topic: str, slide_count: int, template_type: int) -> l
             logger.warning("OpenRouter model failed (%s): %s", model, exc)
 
     logger.error("All OpenRouter attempts failed: %s", last_error)
-    return _fallback_slides(topic, slide_count)
+    return _fallback_slides(topic, slide_count, language_code)
 
 
 async def generate_slide_content(
@@ -197,13 +279,15 @@ async def generate_slide_content(
     slide_count: int,
     template_type: int | None = None,
     presentation_type: int | None = None,
+    lang: str = "ru",
 ) -> list[SlideContent]:
     effective_template_type = template_type if template_type is not None else presentation_type
     if effective_template_type is None:
         effective_template_type = 1
 
     try:
-        return await _generate_async(topic, slide_count, int(effective_template_type))
+        effective_lang = _normalize_language_code(lang)
+        return await _generate_async(topic, slide_count, int(effective_template_type), effective_lang)
     except Exception as exc:
         logger.exception("Unexpected error while generating slides: %s", exc)
-        return _fallback_slides(topic, slide_count)
+        return _fallback_slides(topic, slide_count, _normalize_language_code(lang))

@@ -346,6 +346,7 @@ async def process_topic(message: Message, state: FSMContext) -> None:
             topic=topic,
             slide_count=slide_count,
             template_type=template_types[0] if template_types else 1,
+            lang=lang,
         )
         file_path = await build_presentation_file(
             topic=topic,

@@ -1,12 +1,12 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
-from pathlib import Path
-
-from sqlalchemy import BigInteger, Integer, String, create_engine, select, text
+from sqlalchemy import BigInteger, Integer, String, select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
-DB_PATH = Path(__file__).resolve().parents[1] / "bot.sqlite3"
+from bot.config import load_settings
+
+settings = load_settings()
 
 
 class Base(DeclarativeBase):
@@ -22,7 +22,7 @@ class UserBalance(Base):
     language: Mapped[str] = mapped_column(String(2), nullable=False, default="ru")
 
 
-engine = create_async_engine(f"sqlite+aiosqlite:///{DB_PATH}", future=True)
+engine = create_async_engine(settings.database_url, future=True)
 SessionLocal = async_sessionmaker(bind=engine, expire_on_commit=False, future=True)
 
 

@@ -50,6 +50,17 @@ def _parse_hex_color(color_hex: str) -> RGBColor:
     return RGBColor(int(value[0:2], 16), int(value[2:4], 16), int(value[4:6], 16))
 
 
+def _estimate_body_font_size(slide: SlideContent) -> int:
+    # Balance readability for dense slides.
+    max_len = max((len(item) for item in slide.bullets), default=0)
+    bullet_count = len(slide.bullets)
+    if bullet_count >= 5 or max_len > 150:
+        return 18
+    if bullet_count >= 4 or max_len > 110:
+        return 20
+    return 22
+
+
 def _build_presentation_sync(
     topic: str,
     template_types: list[int],
@@ -93,7 +104,7 @@ def _build_presentation_sync(
         title_paragraph.text = slide_content.title
         title_paragraph.font.bold = True
         title_paragraph.font.name = font_name
-        title_paragraph.font.size = Pt(40)
+        title_paragraph.font.size = Pt(36)
         title_paragraph.font.color.rgb = color
         title_paragraph.alignment = PP_ALIGN.CENTER
 
@@ -107,15 +118,16 @@ def _build_presentation_sync(
         body_frame.clear()
         body_frame.vertical_anchor = MSO_ANCHOR.MIDDLE
         body_frame.word_wrap = True
+        body_font_size = _estimate_body_font_size(slide_content)
 
         for bullet_index, bullet in enumerate(slide_content.bullets):
             paragraph = body_frame.paragraphs[0] if bullet_index == 0 else body_frame.add_paragraph()
-            paragraph.text = bullet
+            paragraph.text = f"• {bullet}"
             paragraph.level = 0
             paragraph.font.name = font_name
-            paragraph.font.size = Pt(24)
+            paragraph.font.size = Pt(body_font_size)
             paragraph.font.color.rgb = color
-            paragraph.alignment = PP_ALIGN.CENTER
+            paragraph.alignment = PP_ALIGN.LEFT
 
     out_dir = Path(tempfile.mkdtemp(prefix="tg_presentation_"))
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")

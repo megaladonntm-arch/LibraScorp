@@ -15,6 +15,7 @@ from bot.db import init_db
 from bot.handlers import setup_routers
 
 
+
 async def main() -> None:
     logging.basicConfig(
         level=logging.INFO,
