@@ -1,6 +1,5 @@
 ﻿from __future__ import annotations
 
-import asyncio
 import json
 import logging
 import re
@@ -8,7 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from openai import OpenAI
+from openai import AsyncOpenAI
 
 logger = logging.getLogger(__name__)
 
@@ -144,7 +143,7 @@ def _normalize_slides(topic: str, slide_count: int, raw: Any) -> list[SlideConte
     return slides[:slide_count]
 
 
-def _generate_sync(topic: str, slide_count: int, template_type: int) -> list[SlideContent]:
+async def _generate_async(topic: str, slide_count: int, template_type: int) -> list[SlideContent]:
     api_key = OPENROUTER_API_KEY.strip()
     if not api_key:
         logger.error("OPENROUTER_API_KEY is empty")
@@ -167,12 +166,12 @@ def _generate_sync(topic: str, slide_count: int, template_type: int) -> list[Sli
         "- Content must be specific, no generic filler."
     )
 
-    client = OpenAI(base_url="https://openrouter.ai/api/v1", api_key=api_key)
+    client = AsyncOpenAI(base_url="https://openrouter.ai/api/v1", api_key=api_key)
 
     last_error: Exception | None = None
     for model in MODEL_CANDIDATES:
         try:
-            response = client.chat.completions.create(
+            response = await client.chat.completions.create(
                 model=model,
                 messages=[
                     {"role": "system", "content": "You are a presentation writing expert."},
@@ -204,7 +203,7 @@ async def generate_slide_content(
         effective_template_type = 1
 
     try:
-        return await asyncio.to_thread(_generate_sync, topic, slide_count, int(effective_template_type))
+        return await _generate_async(topic, slide_count, int(effective_template_type))
     except Exception as exc:
         logger.exception("Unexpected error while generating slides: %s", exc)
         return _fallback_slides(topic, slide_count)

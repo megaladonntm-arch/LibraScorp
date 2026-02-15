@@ -1,21 +1,24 @@
 ﻿from aiogram.types import KeyboardButton, ReplyKeyboardMarkup
 
+from bot.i18n import color_buttons, label
 
-def build_main_menu(is_admin: bool = False) -> ReplyKeyboardMarkup:
+
+def build_main_menu(lang: str, is_admin: bool = False) -> ReplyKeyboardMarkup:
     keyboard = [
-        [KeyboardButton(text="Создать презентацию")],
-        [KeyboardButton(text="О боте"), KeyboardButton(text="Помощь")],
+        [KeyboardButton(text=label(lang, "create_presentation"))],
+        [KeyboardButton(text=label(lang, "about")), KeyboardButton(text=label(lang, "help"))],
+        [KeyboardButton(text=label(lang, "language"))],
     ]
     if is_admin:
-        keyboard.append([KeyboardButton(text="Админ-панель")])
+        keyboard.append([KeyboardButton(text=label(lang, "admin_panel"))])
     return ReplyKeyboardMarkup(keyboard=keyboard, resize_keyboard=True)
 
 
-def build_admin_panel_menu() -> ReplyKeyboardMarkup:
+def build_admin_panel_menu(lang: str) -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
         keyboard=[
-            [KeyboardButton(text="Выдать токены"), KeyboardButton(text="Проверить токены")],
-            [KeyboardButton(text="В меню")],
+            [KeyboardButton(text=label(lang, "issue_tokens")), KeyboardButton(text=label(lang, "check_tokens"))],
+            [KeyboardButton(text=label(lang, "to_menu"))],
         ],
         resize_keyboard=True,
     )
@@ -27,6 +30,30 @@ def build_font_menu() -> ReplyKeyboardMarkup:
             [KeyboardButton(text="Times New Roman"), KeyboardButton(text="Arial")],
             [KeyboardButton(text="Calibri"), KeyboardButton(text="Verdana")],
             [KeyboardButton(text="Georgia")],
+        ],
+        resize_keyboard=True,
+    )
+
+
+def build_color_menu(lang: str) -> ReplyKeyboardMarkup:
+    options = color_buttons(lang)
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text=options[0]), KeyboardButton(text=options[1])],
+            [KeyboardButton(text=options[2]), KeyboardButton(text=options[3])],
+            [KeyboardButton(text=options[4]), KeyboardButton(text=options[5])],
+            [KeyboardButton(text=options[6]), KeyboardButton(text=options[7])],
+        ],
+        resize_keyboard=True,
+    )
+
+
+def build_language_menu(lang: str) -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text=label(lang, "choose_ru")), KeyboardButton(text=label(lang, "choose_en"))],
+            [KeyboardButton(text=label(lang, "choose_uz"))],
+            [KeyboardButton(text=label(lang, "to_menu"))],
         ],
         resize_keyboard=True,
     )

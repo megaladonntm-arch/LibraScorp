@@ -22,7 +22,7 @@ async def main() -> None:
     )
 
     settings = load_settings()
-    init_db()
+    await init_db()
     bot = Bot(
         token=settings.bot_token,
         default=DefaultBotProperties(parse_mode=ParseMode.HTML),

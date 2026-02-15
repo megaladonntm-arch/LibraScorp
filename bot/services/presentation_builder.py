@@ -1,5 +1,6 @@
 ﻿from __future__ import annotations
 
+import asyncio
 import re
 import tempfile
 from datetime import datetime
@@ -33,6 +34,10 @@ def _optimize_image_quality(image_path: Path) -> Path:
         return image_path
 
 
+async def _optimize_image_quality_async(image_path: Path) -> Path:
+    return await asyncio.to_thread(_optimize_image_quality, image_path)
+
+
 def _safe_filename(source: str) -> str:
     cleaned = re.sub(r"[^\w\-]+", "_", source, flags=re.UNICODE).strip("_")
     return cleaned[:40] or "presentation"
@@ -45,7 +50,7 @@ def _parse_hex_color(color_hex: str) -> RGBColor:
     return RGBColor(int(value[0:2], 16), int(value[2:4], 16), int(value[4:6], 16))
 
 
-def build_presentation_file(
+def _build_presentation_sync(
     topic: str,
     template_types: list[int],
     slides: list[SlideContent],
@@ -124,3 +129,20 @@ def build_presentation_file(
             pass
 
     return output_path
+
+
+async def build_presentation_file(
+    topic: str,
+    template_types: list[int],
+    slides: list[SlideContent],
+    font_name: str,
+    font_color: str,
+) -> Path:
+    return await asyncio.to_thread(
+        _build_presentation_sync,
+        topic,
+        template_types,
+        slides,
+        font_name,
+        font_color,
+    )
