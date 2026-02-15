@@ -15,7 +15,6 @@
     "restartPolicyType": "ALWAYS",
     "restartPolicyMaxRetries": 10,
     "sleepApplication": false,
-    "startCommand": "python -m bot.main",
-    "requiredMountPath": "/data"
+    "startCommand": "python -m bot.main"
   }
 }
