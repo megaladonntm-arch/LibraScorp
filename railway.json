@@ -1,0 +1,21 @@
+{
+  "$schema": "https://railway.com/railway.schema.json",
+  "build": {
+    "builder": "RAILPACK",
+    "watchPatterns": [
+      "bot/**",
+      "requirements.txt",
+      "railway.json",
+      "Procfile",
+      ".python-version"
+    ]
+  },
+  "deploy": {
+    "numReplicas": 1,
+    "restartPolicyType": "ALWAYS",
+    "restartPolicyMaxRetries": 10,
+    "sleepApplication": false,
+    "startCommand": "python -m bot.main",
+    "requiredMountPath": "/data"
+  }
+}
