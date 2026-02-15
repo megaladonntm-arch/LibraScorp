@@ -1,4 +1,4 @@
-import asyncio
+﻿import asyncio
 import logging
 import sys
 from pathlib import Path
@@ -11,6 +11,7 @@ if __package__ in (None, ""):
     sys.path.append(str(Path(__file__).resolve().parents[1]))
 
 from bot.config import load_settings
+from bot.db import init_db
 from bot.handlers import setup_routers
 
 
@@ -21,6 +22,7 @@ async def main() -> None:
     )
 
     settings = load_settings()
+    init_db()
     bot = Bot(
         token=settings.bot_token,
         default=DefaultBotProperties(parse_mode=ParseMode.HTML),

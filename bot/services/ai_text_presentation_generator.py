@@ -1,23 +1,24 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import asyncio
 import json
 import logging
-import os
 import re
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from openai import OpenAI
-from dotenv import load_dotenv
 
 logger = logging.getLogger(__name__)
 
 ASSETS_DIR = Path(__file__).resolve().parents[2] / "assets_pdf"
-DEFAULT_MODEL = "openai/gpt-oss-120b:free"
-FALLBACK_MODELS = (
+OPENROUTER_API_KEY = "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"
+MODEL_CANDIDATES = (
+    "openai/gpt-oss-120b:free",
+    "deepseek/deepseek-chat-v3-0324:free",
+    "meta-llama/llama-3.3-70b-instruct:free",
     "openai/gpt-4o-mini",
-    "openai/gpt-4.1-mini",
 )
 
 
@@ -58,24 +59,8 @@ def resolve_template_asset(template_type: int) -> Path | None:
     return None
 
 
-def _model_candidates() -> list[str]:
-    from_env = os.getenv("OPENROUTER_MODEL", "").strip()
-    candidates: list[str] = []
-    if from_env:
-        for item in from_env.split(","):
-            model = item.strip()
-            if model:
-                candidates.append(model)
-
-    for model in (DEFAULT_MODEL, *FALLBACK_MODELS):
-        if model not in candidates:
-            candidates.append(model)
-    return candidates
-
-
-def _extract_json(payload: str) -> dict:
+def _extract_json(payload: str) -> Any:
     raw = payload.strip()
-
     if raw.startswith("```"):
         raw = re.sub(r"^```(?:json)?\s*", "", raw)
         raw = re.sub(r"\s*```$", "", raw)
@@ -83,57 +68,64 @@ def _extract_json(payload: str) -> dict:
     try:
         return json.loads(raw)
     except json.JSONDecodeError:
+        match = re.search(r"\[.*\]", raw, flags=re.DOTALL)
+        if match:
+            return json.loads(match.group(0))
         match = re.search(r"\{.*\}", raw, flags=re.DOTALL)
-        if not match:
-            raise ValueError("AI response does not contain JSON.")
-        return json.loads(match.group(0))
+        if match:
+            data = json.loads(match.group(0))
+            return data.get("slides", []) if isinstance(data, dict) else data
+        raise
 
 
 def _fallback_slides(topic: str, slide_count: int) -> list[SlideContent]:
     slides: list[SlideContent] = []
-    for idx in range(1, slide_count + 1):
-        if idx == 1:
+    for i in range(1, slide_count + 1):
+        if i == 1:
             slides.append(
                 SlideContent(
                     title=f"{topic}: обзор",
                     bullets=[
-                        "Краткое введение в тему.",
-                        "Почему тема важна сейчас.",
-                        "Что будет разобрано в презентации.",
+                        "Вводная часть по теме.",
+                        "Почему это важно сейчас.",
+                        "Что разберем в презентации.",
                     ],
                 )
             )
-        elif idx == slide_count:
+        elif i == slide_count:
             slides.append(
                 SlideContent(
-                    title="Выводы",
+                    title="Заключение",
                     bullets=[
-                        "Ключевые идеи по теме.",
-                        "Практические шаги применения.",
-                        "Рекомендации для следующего этапа.",
+                        "Ключевые выводы.",
+                        "Практические шаги.",
+                        "Итоговая рекомендация.",
                     ],
                 )
             )
         else:
             slides.append(
                 SlideContent(
-                    title=f"{topic}: слайд {idx}",
+                    title=f"{topic}: слайд {i}",
                     bullets=[
-                        "Основной тезис слайда.",
-                        "Факты и аргументы по тезису.",
-                        "Промежуточный вывод.",
+                        "Главная идея слайда.",
+                        "Подтверждающие факты или пример.",
+                        "Короткий промежуточный вывод.",
                     ],
                 )
             )
     return slides
 
 
-def _normalize_slides(topic: str, slide_count: int, slides_raw: object) -> list[SlideContent]:
-    if not isinstance(slides_raw, list):
-        return _fallback_slides(topic=topic, slide_count=slide_count)
+def _normalize_slides(topic: str, slide_count: int, raw: Any) -> list[SlideContent]:
+    if isinstance(raw, dict):
+        raw = raw.get("slides")
+
+    if not isinstance(raw, list):
+        return _fallback_slides(topic, slide_count)
 
     slides: list[SlideContent] = []
-    for item in slides_raw[:slide_count]:
+    for item in raw[:slide_count]:
         if not isinstance(item, dict):
             continue
         title = str(item.get("title", "")).strip() or "Без названия"
@@ -142,76 +134,77 @@ def _normalize_slides(topic: str, slide_count: int, slides_raw: object) -> list[
             bullets_raw = []
         bullets = [str(x).strip() for x in bullets_raw if str(x).strip()]
         if not bullets:
-            bullets = ["Основная мысль слайда."]
+            bullets = ["Главная мысль слайда."]
         slides.append(SlideContent(title=title, bullets=bullets[:5]))
 
     if len(slides) < slide_count:
-        slides.extend(_fallback_slides(topic=topic, slide_count=slide_count - len(slides)))
+        fallback = _fallback_slides(topic, slide_count)
+        slides.extend(fallback[len(slides):slide_count])
+
     return slides[:slide_count]
 
 
 def _generate_sync(topic: str, slide_count: int, template_type: int) -> list[SlideContent]:
-    load_dotenv()
-    api_key = os.getenv("OPENROUTER_API_KEY", "").strip()
+    api_key = OPENROUTER_API_KEY.strip()
     if not api_key:
-        logger.warning("OPENROUTER_API_KEY is empty. Using fallback slide text.")
-        return _fallback_slides(topic=topic, slide_count=slide_count)
+        logger.error("OPENROUTER_API_KEY is empty")
+        return _fallback_slides(topic, slide_count)
 
     prompt = (
-        "Сгенерируй текст презентации на русском языке.\n"
-        f"Тема: {topic}\n"
-        f"Количество слайдов: {slide_count}\n"
-        f"Тип шаблона: {template_type}\n\n"
-        "Верни строго JSON-объект без markdown и без лишнего текста.\n"
-        "Формат:\n"
+        "Generate slide content in Russian. Return JSON only.\n"
+        f"Topic: {topic}\n"
+        f"Slide count: {slide_count}\n"
+        f"Template type: {template_type}\n\n"
+        "Format:\n"
         "{\n"
         '  "slides": [\n'
-        '    {"title": "Заголовок", "bullets": ["пункт 1", "пункт 2", "пункт 3"]}\n'
+        '    {"title": "Slide title", "bullets": ["point 1", "point 2", "point 3"]}\n'
         "  ]\n"
         "}\n\n"
-        "Требования:\n"
-        "- Ровно столько элементов в slides, сколько задано в количестве слайдов.\n"
-        "- Для каждого слайда 3-5 кратких пунктов.\n"
-        "- Пункты должны быть содержательными, без общих фраз."
+        "Rules:\n"
+        "- Exactly the requested slide count.\n"
+        "- 3 to 5 concise bullets per slide.\n"
+        "- Content must be specific, no generic filler."
     )
 
-    client = OpenAI(
-        base_url="https://openrouter.ai/api/v1",
-        api_key=api_key,
-    )
+    client = OpenAI(base_url="https://openrouter.ai/api/v1", api_key=api_key)
 
     last_error: Exception | None = None
-    for model in _model_candidates():
+    for model in MODEL_CANDIDATES:
         try:
             response = client.chat.completions.create(
                 model=model,
                 messages=[
-                    {"role": "system", "content": "Ты эксперт по созданию презентаций."},
+                    {"role": "system", "content": "You are a presentation writing expert."},
                     {"role": "user", "content": prompt},
                 ],
                 temperature=0.7,
-                extra_body={"reasoning": {"enabled": False}},
             )
             content = response.choices[0].message.content or ""
-            data = _extract_json(content)
-            slides = _normalize_slides(topic=topic, slide_count=slide_count, slides_raw=data.get("slides"))
-            logger.info("Slides generated via OpenRouter model: %s", model)
+            parsed = _extract_json(content)
+            slides = _normalize_slides(topic, slide_count, parsed)
+            logger.info("Slides generated via model: %s", model)
             return slides
         except Exception as exc:
             last_error = exc
-            logger.warning("OpenRouter generation failed for model '%s': %s", model, exc)
+            logger.warning("OpenRouter model failed (%s): %s", model, exc)
 
     logger.error("All OpenRouter attempts failed: %s", last_error)
-    return _fallback_slides(topic=topic, slide_count=slide_count)
+    return _fallback_slides(topic, slide_count)
 
 
 async def generate_slide_content(
     topic: str,
     slide_count: int,
-    template_type: int,
+    template_type: int | None = None,
+    presentation_type: int | None = None,
 ) -> list[SlideContent]:
+    effective_template_type = template_type if template_type is not None else presentation_type
+    if effective_template_type is None:
+        effective_template_type = 1
+
     try:
-        return await asyncio.to_thread(_generate_sync, topic, slide_count, template_type)
+        return await asyncio.to_thread(_generate_sync, topic, slide_count, int(effective_template_type))
     except Exception as exc:
         logger.exception("Unexpected error while generating slides: %s", exc)
-        return _fallback_slides(topic=topic, slide_count=slide_count)
+        return _fallback_slides(topic, slide_count)
