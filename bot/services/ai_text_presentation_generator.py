@@ -86,77 +86,59 @@ def _fallback_slides(topic: str, slide_count: int, lang: str) -> list[SlideConte
     if lang == "en":
         intro_title = f"{topic}: Overview and Introduction"
         intro_bullets = [
-            "Complete context and background: why this topic matters now and its relevance to business objectives.",
-            "The specific problems and challenges this presentation will address and solutions we'll explore.",
-            "Key strategic questions this presentation will answer with data-driven insights.",
-            "Expected business outcomes and tangible value for the organization and stakeholders.",
-            "Overview of the presentation structure and what will be covered in each section.",
+            "Context and relevance: why this topic matters and its business importance.",
+            "Key questions this presentation will answer with data-driven insights.",
+            "Expected outcomes and practical value for stakeholders.",
         ]
         body_title = f"{topic}: Detailed Analysis"
         body_bullets = [
-            "Core concept explained thoroughly with definitions, context, and real-world applications.",
-            "Concrete examples, case studies, and detailed scenarios demonstrating the concept in practice.",
-            "Relevant data, statistics, metrics, and benchmarks supporting the main idea.",
-            "Practical implementation guidance, best practices, and proven methodologies.",
-            "Potential challenges, risks, and mitigation strategies for successful execution.",
+            "Core concept with practical applications and real-world examples.",
+            "Key data, statistics, and evidence supporting the main idea.",
+            "Implementation guidance and best practices for effective execution.",
         ]
-        end_title = "Comprehensive Conclusion and Next Steps"
+        end_title = "Conclusion and Next Steps"
         end_bullets = [
-            "Complete summary of all major findings, recommendations, and conclusions from the presentation.",
-            "Strategic priorities and action plan: detailed roadmap for implementation.",
-            "Specific next steps, responsibilities, timelines, and key performance indicators to track success.",
-            "Expected outcomes and long-term impact on business goals and organizational growth.",
-            "Q&A and resources available for further information and team support.",
+            "Summary of findings and key recommendations from the presentation.",
+            "Strategic priorities and action plan for implementation.",
+            "Next steps, timeline, and success metrics to measure progress.",
         ]
     elif lang == "uz":
         intro_title = f"{topic}: Kirish va Ijobiy Ko'rikka Olish"
         intro_bullets = [
-            "To'liq kontekst va fon: nega bu mavzu muhim va uning daromadgim o'rni nima.",
-            "Ushbu taqdimot javob beradigan muammolar, qiyinchiliklar va yechimlar.",
-            "Strategik savollar: taqdimot qanday ma'lumotlar asosida javob beradi.",
-            "Kutilayotgan biznes natijalar va tashkilot uchun amaliy foyda.",
-            "Taqdimotning tuzilishi: har bir bo'lim nima o'z ichiga oladi.",
+            "Kontekst va dolzarbligi: nega bu mavzu muhim va biznesga ta'sir qiladi.",
+            "Strategik savollar: taqdimot javob beradigan asosiy masalalar.",
+            "Kutilayotgan natijalar va stakeholderlar uchun amaliy foyda.",
         ]
         body_title = f"{topic}: Batafsil Tahlil"
         body_bullets = [
-            "Asosiy tushuncha to'liq izohlanadi: ta'rif, kontekst va haqiqiy qo'llaniladigan misollar.",
-            "Konkret holat o'rganilari, ishchi oladigan mashhur misollar va batafsil stsenariylar.",
-            "Tegishli ma'lumotlar, statistika, metrikalalar va soha bo'yicha taqqoslamalar.",
-            "Amaliy tatbiq bo'yicha ko'rsatmalar, eng yaxshi amaliyotlar va isbotlangan metodlar.",
-            "Mumkin bo'lgan muammolar, xطarlar va muvaffaqiyatli ijro uchun xavf kamaytirish strategiyasi.",
+            "Asosiy tushuncha aqliy ta'rif va haqiqiy misollar bilan.",
+            "Tegishli ma'lumotlar, statistika va isboti qo'llaniladigan faktlar.",
+            "Amaliy ko'rsatmalar va eng yaxshi amaliyotlar bilan ijro rejasi.",
         ]
-        end_title = "Keng Ko'lamli Xulosa va Keyingi Qadamlar"
+        end_title = "Xulosa va Keyingi Qadamlar"
         end_bullets = [
-            "Barcha asosiy topilmalar, tavsiyalar va taqdimotdan chiqarilgan xulosalar qisqacha.",
-            "Strategik ustuvor yo'nalishlar va amaliy reja: batafsil ijro yo'limasi.",
-            "Aniq keyingi qadamlar, mas'uliyatlar, vaqt jadavali va muvaffaqiyat ko'rsatkich.",
-            "Kutilayotgan natijalar va biznes maqsadlariga hamda tashkilot rivojlanishiga uzoq muddatli ta'sir.",
-            "Savollar-javoblar va batafsil ma'lumot uchun mavjud resurslar.",
+            "Asosiy topilmalar va eng muhim tavsiyalar qisqacha.",
+            "Strategik ustuvor yo'nalishlar va ijro rejasi.",
+            "Aniq keyingi qadamlar, vaqt jadavali va natija ko'rsatkichlari.",
         ]
     else:
         intro_title = f"{topic}: Полный обзор и введение"
         intro_bullets = [
-            "Полный контекст и история: почему эта тема критически важна для организации и актуальна сейчас.",
-            "Конкретные проблемы и вызовы, которые рассматривает презентация, а также предлагаемые решения.",
-            "Ключевые стратегические вопросы, на которые дадут ответ данные и анализ в презентации.",
-            "Ожидаемые результаты для бизнеса и конкретная ценность для организации и её уровней управления.",
-            "Обзор структуры презентации, что будет рассмотрено в каждом разделе и как они связаны.",
+            "Контекст и актуальность: почему эта тема важна для организации сейчас.",
+            "Ключевые вопросы, на которые дадут ответ данные и анализ в презентации.",
+            "Ожидаемые результаты и практическая ценность для аудитории.",
         ]
         body_title = f"{topic}: Детальный анализ"
         body_bullets = [
-            "Основная концепция объяснена полностью с определениями, историческим контекстом и примерами применения.",
-            "Конкретные примеры, кейс-стади, реальные сценарии, демонстрирующие как это работает на практике.",
-            "Актуальные данные, статистика, метрики, бенчмарки и исследования, подтверждающие основные идеи.",
-            "Практические рекомендации по внедрению, лучшие практики и проверенные методологии из разных компаний.",
-            "Возможные трудности, риски, препятствия и конкретные стратегии их преодоления для успеха.",
+            "Основная концепция с примерами применения и реальными сценариями.",
+            "Ключевые данные, статистика и факты, подтверждающие идеи.",
+            "Практические рекомендации и методологии для успешного внедрения.",
         ]
-        end_title = "Комплексное заключение и следующие шаги"
+        end_title = "Выводы и следующие шаги"
         end_bullets = [
-            "Полное резюме всех главных выводов, рекомендаций и заключений из всей презентации.",
-            "Стратегические приоритеты и план действий: детальная дорожная карта по внедрению.",
-            "Конкретные следующие шаги, ответственные лица, сроки выполнения и ключевые показатели успеха.",
-            "Ожидаемые результаты и долгосрочное влияние на достижение бизнес-целей и развитие организации.",
-            "Дополнительные ресурсы, поддержка команды и варианты получения дополнительной информации.",
+            "Резюме главных выводов и ключевых рекомендаций из презентации.",
+            "Стратегические приоритеты и план действий по внедрению.",
+            "Конкретные шаги, сроки и показатели для отслеживания прогресса.",
         ]
 
     slides: list[SlideContent] = []
@@ -226,7 +208,7 @@ def _normalize_slides(topic: str, slide_count: int, raw: Any, lang: str) -> list
                 bullets = ["Ushbu slaydning asosiy g'oyasi."]
             else:
                 bullets = ["Главная мысль слайда."]
-        slides.append(SlideContent(title=title, bullets=bullets[:7]))
+        slides.append(SlideContent(title=title, bullets=bullets[:4]))
 
     if len(slides) < slide_count:
         fallback = _fallback_slides(topic, slide_count, lang)
@@ -245,7 +227,7 @@ async def _generate_async(topic: str, slide_count: int, template_type: int, lang
     language_name = LANGUAGE_NAMES[language_code]
 
     prompt = (
-        "Create comprehensive, detailed slide content for a professional business presentation. Return strict JSON only.\n"
+        "Create professional, well-balanced slide content for a presentation. Return strict JSON only.\n"
         f"Topic: {topic}\n"
         f"Slide count: {slide_count}\n"
         f"Template type: {template_type}\n\n"
@@ -253,22 +235,22 @@ async def _generate_async(topic: str, slide_count: int, template_type: int, lang
         "Format:\n"
         "{\n"
         '  "slides": [\n'
-        '    {"title": "Slide title", "bullets": ["point 1", "point 2", "point 3", "point 4", "point 5"]}\n'
+        '    {"title": "Clear title", "bullets": ["point 1", "point 2", "point 3", "point 4"]}\n'
         "  ]\n"
         "}\n\n"
         "Rules:\n"
         "- Exactly the requested slide count.\n"
-        "- 5 to 7 detailed and comprehensive bullets per slide (not concise, but DETAILED).\n"
-        "- Each bullet must be thorough, substantive, and informative - write fully and completely.\n"
-        "- Slide 1 is a compelling introduction with context and importance.\n"
-        "- Final slide is comprehensive conclusion with summary and forward-looking recommendations.\n"
-        "- Each bullet should be specific, detailed, and actionable with context and reasoning.\n"
-        "- Include concrete facts, realistic examples, detailed metrics, statistics, case studies, or thorough recommendations.\n"
-        "- Expand on each point - explain WHY, HOW, and provide detailed context.\n"
-        "- Bullets should be substantial (2-3 sentences each), not one-liners.\n"
-        "- Avoid repeating the same idea across slides - each point should add new value.\n"
-        "- Be comprehensive and thorough on the topic - write in detail across all slides.\n"
-        "- No markdown, no code fences, no commentary outside JSON."
+        "- 3 to 4 HIGH-QUALITY bullets per slide (not too many, but substantive).\n"
+        "- Each bullet: one complete, well-written sentence (120-150 chars). Clear and professional.\n"
+        "- Slide 1: engaging title slide with main topic and relevance.\n"
+        "- Last slide: clear conclusions and next steps.\n"
+        "- Middle slides: key ideas with specific examples, facts, or practical advice.\n"
+        "- Write clearly and grammatically - no redundancy, every word counts.\n"
+        "- Include relevant examples, statistics, or practical tips where applicable.\n"
+        "- Make the slide visually balanced - not too crowded, easy to read.\n"
+        "- Each slide must have unique, non-repetitive content.\n"
+        "- Avoid one-liners and vague statements - be specific and professional.\n"
+        "- No markdown formatting, no code blocks, JSON only."
     )
 
     client = AsyncOpenAI(base_url="https://openrouter.ai/api/v1", api_key=api_key)

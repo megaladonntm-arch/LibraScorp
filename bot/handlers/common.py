@@ -343,8 +343,9 @@ async def process_template_type(message: Message, state: FSMContext) -> None:
     # For templates 1-10: ask for color variation
     if selected <= 10:
         await state.set_state(PresentationForm.template_color)
-        colors_msg = "🎨 <b>Выбери цвет для шаблона:</b>\n\n1️⃣ Blue\n2️⃣ Purple\n3️⃣ Red\n4️⃣ Orange\n5️⃣ Green"
-        await message.answer(colors_msg, parse_mode="HTML", reply_markup=ReplyKeyboardRemove())
+        color_msg = t(lang, "ask_template_color")
+        colors_text = f"1️⃣ {t(lang, 'template_color_blue')}\n2️⃣ {t(lang, 'template_color_purple')}\n3️⃣ {t(lang, 'template_color_red')}\n4️⃣ {t(lang, 'template_color_orange')}\n5️⃣ {t(lang, 'template_color_green')}"
+        await message.answer(f"{color_msg}\n\n{colors_text}", parse_mode="HTML", reply_markup=ReplyKeyboardRemove())
         return
 
     # For templates 11+: continue to font selection
@@ -373,8 +374,8 @@ async def process_template_color(message: Message, state: FSMContext) -> None:
     
     selected_color = color_map.get(text.casefold())
     if not selected_color:
-        colors_msg = "❌ Invalid choice. Choose:\n1️⃣ Blue | 2️⃣ Purple | 3️⃣ Red | 4️⃣ Orange | 5️⃣ Green"
-        await message.answer(colors_msg)
+        error_msg = f"❌ {t(lang, 'ask_template_color')}\n\n1️⃣ {t(lang, 'template_color_blue')} | 2️⃣ {t(lang, 'template_color_purple')} | 3️⃣ {t(lang, 'template_color_red')} | 4️⃣ {t(lang, 'template_color_orange')} | 5️⃣ {t(lang, 'template_color_green')}"
+        await message.answer(error_msg)
         return
     
     data = await state.get_data()
