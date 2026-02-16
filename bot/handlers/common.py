@@ -29,10 +29,50 @@ logger = logging.getLogger(__name__)
 router = Router()
 settings = load_settings()
 
+ASSETS_DIR = Path(__file__).resolve().parents[2] / "assets_pdf"
+
+# Template names for display
+TEMPLATE_NAMES = {
+    1: "Template 1",
+    2: "Template 2",
+    3: "Template 3",
+    4: "Template 4",
+    5: "Template 5",
+    6: "Template 6",
+    7: "Template 7",
+    8: "Template 8",
+    9: "Template 9",
+    10: "Template 10",
+}
+
+
+async def send_template_preview(message: Message, template_num: int, lang: str, color: str = None) -> None:
+    """Send template preview image to user with optional color variant"""
+    if color and template_num <= 10:
+        # For templates 1-10 with color selection
+        color_map = {"blue": "", "purple": "_purple", "red": "_red", "orange": "_orange", "green": "_green"}
+        color_suffix = color_map.get(color.lower(), "")
+        template_path = ASSETS_DIR / f"{template_num}{color_suffix}.png"
+    else:
+        template_path = ASSETS_DIR / f"{template_num}.png"
+    
+    if template_path.exists():
+        photo = FSInputFile(str(template_path))
+        template_name = TEMPLATE_NAMES.get(template_num, f"Template {template_num}")
+        color_label = f" ({color.capitalize()})" if color else ""
+        await message.answer_photo(
+            photo=photo,
+            caption=f"<b>{template_name}{color_label}</b>",
+            parse_mode="HTML"
+        )
+    else:
+        await message.answer(t(lang, "template_preview_missing", template=template_num))
+
 
 class PresentationForm(StatesGroup):
     slide_count = State()
     template_type = State()
+    template_color = State()
     font_name = State()
     font_color = State()
     topic = State()
@@ -72,6 +112,27 @@ async def cmd_start(message: Message, state: FSMContext) -> None:
 async def cmd_help(message: Message) -> None:
     lang, _ = await _lang_and_tokens(message)
     await message.answer(t(lang, "help"))
+
+
+@router.message(Command("templates"))
+async def cmd_templates(message: Message) -> None:
+    """Show all available templates"""
+    lang, _ = await _lang_and_tokens(message)
+    available = list_presentation_types()
+    
+    if not available:
+        await message.answer(t(lang, "no_templates"))
+        return
+    
+    await message.answer("📋 <b>Available Templates:</b>\n\n" + 
+                        "\n".join(f"#{num}. {TEMPLATE_NAMES.get(num, f'Template {num}')}" 
+                                 for num in sorted(available)),
+                        parse_mode="HTML")
+    
+    # Send preview images
+    for template_num in sorted(available)[:5]:  # Show first 5
+        await send_template_preview(message, template_num, lang)
+        await message.answer("➖")  # Separator
 
 
 @router.message(F.text.func(lambda value: is_action_text(value, "about")))
@@ -276,12 +337,71 @@ async def process_template_type(message: Message, state: FSMContext) -> None:
     template_index = len(template_types)
     await state.update_data(template_types=template_types, template_index=template_index)
 
+    # Send template preview
+    await send_template_preview(message, selected, lang)
+
+    # For templates 1-10: ask for color variation
+    if selected <= 10:
+        await state.set_state(PresentationForm.template_color)
+        colors_msg = "🎨 <b>Выбери цвет для шаблона:</b>\n\n1️⃣ Blue\n2️⃣ Purple\n3️⃣ Red\n4️⃣ Orange\n5️⃣ Green"
+        await message.answer(colors_msg, parse_mode="HTML", reply_markup=ReplyKeyboardRemove())
+        return
+
+    # For templates 11+: continue to font selection
     if template_index < slide_count:
         await message.answer(t(lang, "choose_template", index=template_index + 1, available=", ".join(map(str, sorted(available)))))
         return
 
     await state.set_state(PresentationForm.font_name)
     await message.answer(t(lang, "ask_font"), reply_markup=build_font_menu())
+
+
+@router.message(PresentationForm.template_color)
+async def process_template_color(message: Message, state: FSMContext) -> None:
+    """Handle template color selection (for templates 1-10)"""
+    lang, _ = await _lang_and_tokens(message)
+    text = (message.text or "").strip()
+    
+    # Map text input to color names
+    color_map = {
+        "1": "blue", "blue": "blue", "1️⃣": "blue",
+        "2": "purple", "purple": "purple", "2️⃣": "purple",
+        "3": "red", "red": "red", "3️⃣": "red",
+        "4": "orange", "orange": "orange", "4️⃣": "orange",
+        "5": "green", "green": "green", "5️⃣": "green",
+    }
+    
+    selected_color = color_map.get(text.casefold())
+    if not selected_color:
+        colors_msg = "❌ Invalid choice. Choose:\n1️⃣ Blue | 2️⃣ Purple | 3️⃣ Red | 4️⃣ Orange | 5️⃣ Green"
+        await message.answer(colors_msg)
+        return
+    
+    data = await state.get_data()
+    slide_count = int(data["slide_count"])
+    template_types = list(data.get("template_types", []))
+    current_template = template_types[-1] if template_types else 1
+    template_index = int(data.get("template_index", 1))
+    
+    # Show preview with selected color
+    await send_template_preview(message, current_template, lang, selected_color)
+    
+    # Store color for this template - use a dictionary approach
+    template_colors = data.get("template_colors", {})
+    template_colors[str(current_template)] = selected_color
+    await state.update_data(template_colors=template_colors)
+
+    # Check if we need to select more templates
+    if template_index < slide_count:
+        available = set(list_presentation_types())
+        await state.set_state(PresentationForm.template_type)
+        await message.answer(t(lang, "choose_template", index=template_index + 1, available=", ".join(map(str, sorted(available)))))
+        return
+
+    # All templates selected, move to font
+    await state.set_state(PresentationForm.font_name)
+    await message.answer(t(lang, "ask_font"), reply_markup=build_font_menu())
+
 
 
 @router.message(PresentationForm.font_name)
