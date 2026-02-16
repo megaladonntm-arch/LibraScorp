@@ -31,7 +31,6 @@ settings = load_settings()
 
 ASSETS_DIR = Path(__file__).resolve().parents[2] / "assets_pdf"
 
-# Template names for display
 TEMPLATE_NAMES = {
     1: "Template 1",
     2: "Template 2",
@@ -47,9 +46,7 @@ TEMPLATE_NAMES = {
 
 
 async def send_template_preview(message: Message, template_num: int, lang: str, color: str = None) -> None:
-    """Send template preview image to user with optional color variant"""
     if color and template_num <= 10:
-        # For templates 1-10 with color selection
         color_map = {"blue": "", "purple": "_purple", "red": "_red", "orange": "_orange", "green": "_green"}
         color_suffix = color_map.get(color.lower(), "")
         template_path = ASSETS_DIR / f"{template_num}{color_suffix}.png"
@@ -67,6 +64,16 @@ async def send_template_preview(message: Message, template_num: int, lang: str, 
         )
     else:
         await message.answer(t(lang, "template_preview_missing", template=template_num))
+
+
+async def show_all_templates(message: Message, lang: str) -> None:
+    available = sorted(list_presentation_types())
+    await message.answer(f"📋 <b>Available Templates:</b>\n\n" + 
+                        "\n".join(f"<b>#{num}</b>" for num in available),
+                        parse_mode="HTML")
+    
+    for template_num in available:
+        await send_template_preview(message, template_num, lang)
 
 
 class PresentationForm(StatesGroup):
@@ -116,7 +123,6 @@ async def cmd_help(message: Message) -> None:
 
 @router.message(Command("templates"))
 async def cmd_templates(message: Message) -> None:
-    """Show all available templates"""
     lang, _ = await _lang_and_tokens(message)
     available = list_presentation_types()
     
@@ -129,10 +135,9 @@ async def cmd_templates(message: Message) -> None:
                                  for num in sorted(available)),
                         parse_mode="HTML")
     
-    # Send preview images
-    for template_num in sorted(available)[:5]:  # Show first 5
+    for template_num in sorted(available)[:5]:
         await send_template_preview(message, template_num, lang)
-        await message.answer("➖")  # Separator
+        await message.answer("➖")
 
 
 @router.message(F.text.func(lambda value: is_action_text(value, "about")))
@@ -313,13 +318,22 @@ async def process_slide_count(message: Message, state: FSMContext) -> None:
             reply_markup=build_main_menu(lang=lang, is_admin=_is_admin(message)),
         )
         return
-    await message.answer(t(lang, "choose_template", index=1, available=", ".join(str(x) for x in available)))
+    
+    await show_all_templates(message, lang)
+    await message.answer(t(lang, "choose_template", index=1, available=", ".join(str(x) for x in sorted(available))))
+
 
 
 @router.message(PresentationForm.template_type)
 async def process_template_type(message: Message, state: FSMContext) -> None:
     lang, _ = await _lang_and_tokens(message)
     text = (message.text or "").strip()
+    
+    if text.lower() in ("cancel", "отмена", "bekor"):
+        await state.set_state(PresentationForm.slide_count)
+        await message.answer(t(lang, "ask_slide_count", tokens=(await get_user_data(message.from_user.id, settings.default_tokens))[0]))
+        return
+    
     if not text.isdigit():
         await message.answer(t(lang, "template_number"))
         return
@@ -337,10 +351,8 @@ async def process_template_type(message: Message, state: FSMContext) -> None:
     template_index = len(template_types)
     await state.update_data(template_types=template_types, template_index=template_index)
 
-    # Send template preview
     await send_template_preview(message, selected, lang)
 
-    # For templates 1-10: ask for color variation
     if selected <= 10:
         await state.set_state(PresentationForm.template_color)
         color_msg = t(lang, "ask_template_color")
@@ -348,7 +360,6 @@ async def process_template_type(message: Message, state: FSMContext) -> None:
         await message.answer(f"{color_msg}\n\n{colors_text}", parse_mode="HTML", reply_markup=ReplyKeyboardRemove())
         return
 
-    # For templates 11+: continue to font selection
     if template_index < slide_count:
         await message.answer(t(lang, "choose_template", index=template_index + 1, available=", ".join(map(str, sorted(available)))))
         return
@@ -357,13 +368,23 @@ async def process_template_type(message: Message, state: FSMContext) -> None:
     await message.answer(t(lang, "ask_font"), reply_markup=build_font_menu())
 
 
+
 @router.message(PresentationForm.template_color)
 async def process_template_color(message: Message, state: FSMContext) -> None:
-    """Handle template color selection (for templates 1-10)"""
     lang, _ = await _lang_and_tokens(message)
     text = (message.text or "").strip()
     
-    # Map text input to color names
+    if text.lower() in ("cancel", "отмена", "bekor"):
+        data = await state.get_data()
+        template_types = list(data.get("template_types", []))
+        if template_types:
+            template_types.pop()
+        await state.update_data(template_types=template_types, template_index=len(template_types))
+        await state.set_state(PresentationForm.template_type)
+        available = sorted(list_presentation_types())
+        await message.answer(t(lang, "choose_template", index=len(template_types) + 1, available=", ".join(map(str, available))))
+        return
+    
     color_map = {
         "1": "blue", "blue": "blue", "1️⃣": "blue",
         "2": "purple", "purple": "purple", "2️⃣": "purple",
@@ -384,24 +405,21 @@ async def process_template_color(message: Message, state: FSMContext) -> None:
     current_template = template_types[-1] if template_types else 1
     template_index = int(data.get("template_index", 1))
     
-    # Show preview with selected color
     await send_template_preview(message, current_template, lang, selected_color)
     
-    # Store color for this template - use a dictionary approach
     template_colors = data.get("template_colors", {})
     template_colors[str(current_template)] = selected_color
     await state.update_data(template_colors=template_colors)
 
-    # Check if we need to select more templates
     if template_index < slide_count:
-        available = set(list_presentation_types())
+        available = sorted(list_presentation_types())
         await state.set_state(PresentationForm.template_type)
-        await message.answer(t(lang, "choose_template", index=template_index + 1, available=", ".join(map(str, sorted(available)))))
+        await message.answer(t(lang, "choose_template", index=template_index + 1, available=", ".join(map(str, available))))
         return
 
-    # All templates selected, move to font
     await state.set_state(PresentationForm.font_name)
     await message.answer(t(lang, "ask_font"), reply_markup=build_font_menu())
+
 
 
 
