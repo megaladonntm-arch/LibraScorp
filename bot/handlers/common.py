@@ -22,8 +22,10 @@ from bot.db import (
     get_recent_user_events,
     get_user_data,
     get_user_presentation_history,
+    get_user_template_combos,
     set_user_language,
     try_spend_user_token,
+    upsert_user_template_combo,
 )
 from bot.i18n import color_hex_by_text, detect_language, is_action_text, t
 from bot.keyboards.main_menu import (
@@ -65,6 +67,65 @@ TEMPLATE_NAMES = {
 }
 
 
+def _normalize_template_sequence(raw: str, available: set[int]) -> list[int] | None:
+    parts = [item.strip() for item in raw.split(",") if item.strip()]
+    if not parts:
+        return None
+    result: list[int] = []
+    for part in parts:
+        if not part.isdigit():
+            return None
+        value = int(part)
+        if value not in available:
+            return None
+        result.append(value)
+    return result
+
+
+def _expand_combo(sequence: list[int], slide_count: int) -> list[int]:
+    if not sequence:
+        return []
+    expanded: list[int] = []
+    while len(expanded) < slide_count:
+        expanded.extend(sequence)
+    return expanded[:slide_count]
+
+
+def _default_combos(available: list[int], lang: str) -> list[tuple[str, list[int]]]:
+    if not available:
+        return []
+    names = {
+        "ru": {
+            "all": "Все шаблоны по кругу",
+            "forward": "Классика по возрастанию",
+            "reverse": "Контраст по убыванию",
+            "odd_even": "Нечетные + четные",
+        },
+        "en": {
+            "all": "All templates loop",
+            "forward": "Classic ascending",
+            "reverse": "Contrast descending",
+            "odd_even": "Odd + even",
+        },
+        "uz": {
+            "all": "Barcha shablonlar aylana",
+            "forward": "Klassik o'sish",
+            "reverse": "Kamayish kontrasti",
+            "odd_even": "Toq + juft",
+        },
+    }
+    local = names.get(lang, names["ru"])
+    forward = available[:]
+    reverse = list(reversed(available))
+    odd_even = [item for item in available if item % 2 == 1] + [item for item in available if item % 2 == 0]
+    return [
+        (local["all"], available[:]),
+        (local["forward"], forward),
+        (local["reverse"], reverse),
+        (local["odd_even"], odd_even or available[:]),
+    ]
+
+
 async def send_template_preview(message: Message, template_num: int, lang: str, color: str = None) -> None:
     if color and template_num <= 10:
         color_map = {"blue": "", "purple": "_purple", "red": "_red", "orange": "_orange", "green": "_green"}
@@ -86,20 +147,9 @@ async def send_template_preview(message: Message, template_num: int, lang: str, 
         await message.answer(t(lang, "template_preview_missing", template=template_num))
 
 
-async def show_all_templates(message: Message, lang: str) -> None:
-    available = sorted(list_presentation_types())
-    await message.answer(f"📋 <b>Available Templates:</b>\n\n" + 
-                        "\n".join(f"<b>#{num}</b>" for num in available),
-                        parse_mode="HTML")
-    
-    for template_num in available:
-        await send_template_preview(message, template_num, lang)
-
-
 class PresentationForm(StatesGroup):
     slide_count = State()
     template_type = State()
-    template_color = State()
     font_name = State()
     font_color = State()
     topic = State()
@@ -221,6 +271,22 @@ async def my_presentations(message: Message) -> None:
             f"{font_label}: {escape(item.font_name)} | {color_label}: {escape(item.font_color)}"
         )
 
+    await message.answer("\n".join(lines), parse_mode="HTML")
+
+
+@router.message(Command("my_combos"))
+async def my_combos(message: Message) -> None:
+    if message.from_user is None:
+        return
+    lang, _ = await _lang_and_tokens(message)
+    combos = await get_user_template_combos(message.from_user.id)
+    if not combos:
+        await message.answer(t(lang, "my_combos_empty"))
+        return
+
+    lines = [f"🎛 <b>{t(lang, 'my_combos_title')}</b>"]
+    for combo in combos:
+        lines.append(f"{escape(combo.name)}: {escape(combo.templates_csv)}")
     await message.answer("\n".join(lines), parse_mode="HTML")
 
 
@@ -437,8 +503,6 @@ async def process_slide_count(message: Message, state: FSMContext) -> None:
         await message.answer(t(lang, "slide_count_range"))
         return
 
-    await state.update_data(slide_count=count, template_types=[], template_index=0)
-    await state.set_state(PresentationForm.template_type)
     available = list_presentation_types()
     if not available:
         await state.clear()
@@ -447,9 +511,36 @@ async def process_slide_count(message: Message, state: FSMContext) -> None:
             reply_markup=build_main_menu(lang=lang, is_admin=_is_admin(message)),
         )
         return
-    
-    await show_all_templates(message, lang)
-    await message.answer(t(lang, "choose_template", index=1, available=", ".join(str(x) for x in sorted(available))))
+
+    if message.from_user is None:
+        await state.clear()
+        return
+
+    user_combos = await get_user_template_combos(message.from_user.id)
+    options: dict[str, list[int]] = {}
+    lines = [t(lang, "choose_combo_title")]
+    index = 1
+
+    for combo_name, combo_seq in _default_combos(sorted(available), lang):
+        options[str(index)] = combo_seq
+        lines.append(f"{index}. {combo_name}: {','.join(str(x) for x in combo_seq)}")
+        index += 1
+
+    for user_combo in user_combos:
+        combo_seq = _normalize_template_sequence(user_combo.templates_csv, set(available))
+        if not combo_seq:
+            continue
+        options[str(index)] = combo_seq
+        lines.append(f"{index}. [MY] {escape(user_combo.name)}: {','.join(str(x) for x in combo_seq)}")
+        index += 1
+
+    await state.update_data(slide_count=count, combo_options=options, template_types=[])
+    await state.set_state(PresentationForm.template_type)
+    await message.answer("\n".join(lines))
+    await message.answer(
+        t(lang, "choose_combo_hint", available=", ".join(str(x) for x in sorted(available))),
+        reply_markup=ReplyKeyboardRemove(),
+    )
 
 
 
@@ -457,95 +548,50 @@ async def process_slide_count(message: Message, state: FSMContext) -> None:
 async def process_template_type(message: Message, state: FSMContext) -> None:
     lang, _ = await _lang_and_tokens(message)
     text = (message.text or "").strip()
-    
+
     if text.lower() in ("cancel", "отмена", "bekor"):
         await state.set_state(PresentationForm.slide_count)
-        await message.answer(t(lang, "ask_slide_count", tokens=(await get_user_data(message.from_user.id, settings.default_tokens))[0]))
-        return
-    
-    if not text.isdigit():
-        await message.answer(t(lang, "template_number"))
-        return
-
-    selected = int(text)
-    available = set(list_presentation_types())
-    if selected not in available:
-        await message.answer(t(lang, "template_missing", value=selected, available=", ".join(map(str, sorted(available)))))
+        await message.answer(
+            t(lang, "ask_slide_count", tokens=(await get_user_data(message.from_user.id, settings.default_tokens))[0])
+        )
         return
 
     data = await state.get_data()
     slide_count = int(data["slide_count"])
-    template_types = list(data.get("template_types", []))
-    template_types.append(selected)
-    template_index = len(template_types)
-    await state.update_data(template_types=template_types, template_index=template_index)
+    combo_options: dict[str, list[int]] = dict(data.get("combo_options", {}))
+    available_set = set(list_presentation_types())
 
-    await send_template_preview(message, selected, lang)
-
-    if selected <= 10:
-        await state.set_state(PresentationForm.template_color)
-        color_msg = t(lang, "ask_template_color")
-        colors_text = f"1️⃣ {t(lang, 'template_color_blue')}\n2️⃣ {t(lang, 'template_color_purple')}\n3️⃣ {t(lang, 'template_color_red')}\n4️⃣ {t(lang, 'template_color_orange')}\n5️⃣ {t(lang, 'template_color_green')}"
-        await message.answer(f"{color_msg}\n\n{colors_text}", parse_mode="HTML", reply_markup=ReplyKeyboardRemove())
+    if text.casefold().startswith("new "):
+        if message.from_user is None:
+            await state.clear()
+            return
+        payload = text[4:].strip()
+        if ":" not in payload:
+            await message.answer(t(lang, "combo_new_format"))
+            return
+        name_part, seq_part = payload.split(":", 1)
+        combo_name = name_part.strip()
+        if len(combo_name) < 2:
+            await message.answer(t(lang, "combo_name_short"))
+            return
+        combo_seq = _normalize_template_sequence(seq_part, available_set)
+        if not combo_seq:
+            await message.answer(t(lang, "combo_invalid_sequence"))
+            return
+        await upsert_user_template_combo(message.from_user.id, combo_name, combo_seq)
+        template_types = _expand_combo(combo_seq, slide_count)
+        await state.update_data(template_types=template_types)
+        await message.answer(t(lang, "combo_saved", name=combo_name))
+        await state.set_state(PresentationForm.font_name)
+        await message.answer(t(lang, "ask_font"), reply_markup=build_font_menu())
         return
 
-    if template_index < slide_count:
-        await message.answer(t(lang, "choose_template", index=template_index + 1, available=", ".join(map(str, sorted(available)))))
+    if text not in combo_options:
+        await message.answer(t(lang, "combo_pick_number"))
         return
 
-    await state.set_state(PresentationForm.font_name)
-    await message.answer(t(lang, "ask_font"), reply_markup=build_font_menu())
-
-
-
-@router.message(PresentationForm.template_color)
-async def process_template_color(message: Message, state: FSMContext) -> None:
-    lang, _ = await _lang_and_tokens(message)
-    text = (message.text or "").strip()
-    
-    if text.lower() in ("cancel", "отмена", "bekor"):
-        data = await state.get_data()
-        template_types = list(data.get("template_types", []))
-        if template_types:
-            template_types.pop()
-        await state.update_data(template_types=template_types, template_index=len(template_types))
-        await state.set_state(PresentationForm.template_type)
-        available = sorted(list_presentation_types())
-        await message.answer(t(lang, "choose_template", index=len(template_types) + 1, available=", ".join(map(str, available))))
-        return
-    
-    color_map = {
-        "1": "blue", "blue": "blue", "1️⃣": "blue",
-        "2": "purple", "purple": "purple", "2️⃣": "purple",
-        "3": "red", "red": "red", "3️⃣": "red",
-        "4": "orange", "orange": "orange", "4️⃣": "orange",
-        "5": "green", "green": "green", "5️⃣": "green",
-    }
-    
-    selected_color = color_map.get(text.casefold())
-    if not selected_color:
-        error_msg = f"❌ {t(lang, 'ask_template_color')}\n\n1️⃣ {t(lang, 'template_color_blue')} | 2️⃣ {t(lang, 'template_color_purple')} | 3️⃣ {t(lang, 'template_color_red')} | 4️⃣ {t(lang, 'template_color_orange')} | 5️⃣ {t(lang, 'template_color_green')}"
-        await message.answer(error_msg)
-        return
-    
-    data = await state.get_data()
-    slide_count = int(data["slide_count"])
-    template_types = list(data.get("template_types", []))
-    current_template = template_types[-1] if template_types else 1
-    template_index = int(data.get("template_index", 1))
-    
-    await send_template_preview(message, current_template, lang, selected_color)
-    
-    template_colors = data.get("template_colors", {})
-    template_colors[str(current_template)] = selected_color
-    await state.update_data(template_colors=template_colors)
-
-    if template_index < slide_count:
-        available = sorted(list_presentation_types())
-        await state.set_state(PresentationForm.template_type)
-        await message.answer(t(lang, "choose_template", index=template_index + 1, available=", ".join(map(str, available))))
-        return
-
+    template_types = _expand_combo(combo_options[text], slide_count)
+    await state.update_data(template_types=template_types)
     await state.set_state(PresentationForm.font_name)
     await message.answer(t(lang, "ask_font"), reply_markup=build_font_menu())
 

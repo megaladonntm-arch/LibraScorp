@@ -51,7 +51,6 @@ def _parse_hex_color(color_hex: str) -> RGBColor:
 
 
 def _estimate_body_font_size(slide: SlideContent) -> int:
-    # Balance readability for dense slides.
     max_len = max((len(item) for item in slide.bullets), default=0)
     bullet_count = len(slide.bullets)
     if bullet_count >= 5 or max_len > 150:

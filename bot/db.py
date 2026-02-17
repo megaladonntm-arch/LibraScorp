@@ -51,6 +51,17 @@ class UserEventLog(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
+class UserTemplateCombo(Base):
+    __tablename__ = "user_template_combos"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    telegram_user_id: Mapped[int] = mapped_column(BigInteger, index=True, nullable=False)
+    name: Mapped[str] = mapped_column(String(80), nullable=False)
+    templates_csv: Mapped[str] = mapped_column(String(500), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
 engine = create_async_engine(settings.database_url, future=True)
 SessionLocal = async_sessionmaker(bind=engine, expire_on_commit=False, future=True)
 
@@ -207,3 +218,41 @@ async def get_all_users() -> list[UserBalance]:
             select(UserBalance).order_by(UserBalance.id.asc())
         )
         return list(result.scalars().all())
+
+
+async def get_user_template_combos(user_id: int) -> list[UserTemplateCombo]:
+    async with SessionLocal() as session:
+        result = await session.execute(
+            select(UserTemplateCombo)
+            .where(UserTemplateCombo.telegram_user_id == user_id)
+            .order_by(UserTemplateCombo.updated_at.desc(), UserTemplateCombo.id.desc())
+        )
+        return list(result.scalars().all())
+
+
+async def upsert_user_template_combo(user_id: int, name: str, template_types: list[int]) -> None:
+    now = datetime.now(timezone.utc)
+    normalized_name = name.strip()[:80]
+    csv_value = ",".join(str(item) for item in template_types)[:500]
+    async with SessionLocal() as session:
+        result = await session.execute(
+            select(UserTemplateCombo).where(
+                UserTemplateCombo.telegram_user_id == user_id,
+                UserTemplateCombo.name == normalized_name,
+            )
+        )
+        row = result.scalar_one_or_none()
+        if row is None:
+            row = UserTemplateCombo(
+                telegram_user_id=user_id,
+                name=normalized_name,
+                templates_csv=csv_value,
+                created_at=now,
+                updated_at=now,
+            )
+            session.add(row)
+        else:
+            row.templates_csv = csv_value
+            row.updated_at = now
+        await session.flush()
+        await session.commit()
