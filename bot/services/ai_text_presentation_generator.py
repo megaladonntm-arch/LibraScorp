@@ -285,6 +285,7 @@ async def generate_slide_content(
     template_type: int | None = None,
     presentation_type: int | None = None,
     lang: str = "ru",
+    source_material: str | None = None,
 ) -> list[SlideContent]:
     effective_template_type = template_type if template_type is not None else presentation_type
     if effective_template_type is None:
@@ -292,7 +293,16 @@ async def generate_slide_content(
 
     try:
         effective_lang = _normalize_language_code(lang)
-        return await _generate_async(topic, slide_count, int(effective_template_type), effective_lang)
+        enriched_topic = topic
+        if source_material:
+            normalized_source = re.sub(r"\s+", " ", source_material).strip()[:12000]
+            enriched_topic = (
+                f"{topic}\n\n"
+                "Source material (must be used as primary basis):\n"
+                f"{normalized_source}\n\n"
+                "Important: use this source as factual base for slide content."
+            )
+        return await _generate_async(enriched_topic, slide_count, int(effective_template_type), effective_lang)
     except Exception as exc:
         logger.exception("Unexpected error while generating slides: %s", exc)
         return _fallback_slides(topic, slide_count, _normalize_language_code(lang))

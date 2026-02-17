@@ -13,6 +13,7 @@ if __package__ in (None, ""):
 from bot.config import load_settings
 from bot.db import init_db
 from bot.handlers import setup_routers
+from bot.middlewares import ActivityLoggerMiddleware
 
 
 
@@ -29,6 +30,7 @@ async def main() -> None:
         default=DefaultBotProperties(parse_mode=ParseMode.HTML),
     )
     dp = Dispatcher()
+    dp.message.outer_middleware(ActivityLoggerMiddleware())
     dp.include_router(setup_routers())
 
     await dp.start_polling(bot)

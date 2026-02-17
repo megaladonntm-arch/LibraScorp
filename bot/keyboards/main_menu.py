@@ -6,6 +6,7 @@ from bot.i18n import color_buttons, label
 def build_main_menu(lang: str, is_admin: bool = False) -> ReplyKeyboardMarkup:
     keyboard = [
         [KeyboardButton(text=label(lang, "create_presentation"))],
+        [KeyboardButton(text=label(lang, "my_presentations"))],
         [KeyboardButton(text=label(lang, "about")), KeyboardButton(text=label(lang, "help"))],
         [KeyboardButton(text=label(lang, "language"))],
     ]
@@ -18,6 +19,7 @@ def build_admin_panel_menu(lang: str) -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
         keyboard=[
             [KeyboardButton(text=label(lang, "issue_tokens")), KeyboardButton(text=label(lang, "check_tokens"))],
+            [KeyboardButton(text=label(lang, "all_users")), KeyboardButton(text=label(lang, "event_logs"))],
             [KeyboardButton(text=label(lang, "to_menu"))],
         ],
         resize_keyboard=True,
