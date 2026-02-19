@@ -62,6 +62,27 @@ class UserTemplateCombo(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
+class GlobalTemplateCombo(Base):
+    __tablename__ = "global_template_combos"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(80), nullable=False, unique=True)
+    templates_csv: Mapped[str] = mapped_column(String(500), nullable=False)
+    created_by_user_id: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class TemplateSubmissionLog(Base):
+    __tablename__ = "template_submission_logs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    telegram_user_id: Mapped[int] = mapped_column(BigInteger, index=True, nullable=False)
+    combo_name: Mapped[str] = mapped_column(String(80), nullable=False)
+    templates_csv: Mapped[str] = mapped_column(String(500), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
 engine = create_async_engine(settings.database_url, future=True)
 SessionLocal = async_sessionmaker(bind=engine, expire_on_commit=False, future=True)
 
@@ -133,6 +154,15 @@ async def add_user_tokens(user_id: int, amount: int, default_tokens: int = 10) -
     async with SessionLocal() as session:
         user = await _get_or_create_user(session, user_id, default_tokens)
         user.tokens += amount
+        await session.flush()
+        await session.commit()
+        return user.tokens
+
+
+async def remove_user_tokens(user_id: int, amount: int, default_tokens: int = 10) -> int:
+    async with SessionLocal() as session:
+        user = await _get_or_create_user(session, user_id, default_tokens)
+        user.tokens = max(0, user.tokens - max(0, amount))
         await session.flush()
         await session.commit()
         return user.tokens
@@ -256,3 +286,63 @@ async def upsert_user_template_combo(user_id: int, name: str, template_types: li
             row.updated_at = now
         await session.flush()
         await session.commit()
+
+
+async def get_global_template_combos() -> list[GlobalTemplateCombo]:
+    async with SessionLocal() as session:
+        result = await session.execute(
+            select(GlobalTemplateCombo).order_by(GlobalTemplateCombo.updated_at.desc(), GlobalTemplateCombo.id.desc())
+        )
+        return list(result.scalars().all())
+
+
+async def upsert_global_template_combo(name: str, template_types: list[int], created_by_user_id: int) -> None:
+    now = datetime.now(timezone.utc)
+    normalized_name = name.strip()[:80]
+    csv_value = ",".join(str(item) for item in template_types)[:500]
+    async with SessionLocal() as session:
+        result = await session.execute(
+            select(GlobalTemplateCombo).where(GlobalTemplateCombo.name == normalized_name)
+        )
+        row = result.scalar_one_or_none()
+        if row is None:
+            row = GlobalTemplateCombo(
+                name=normalized_name,
+                templates_csv=csv_value,
+                created_by_user_id=created_by_user_id,
+                created_at=now,
+                updated_at=now,
+            )
+            session.add(row)
+        else:
+            row.templates_csv = csv_value
+            row.created_by_user_id = created_by_user_id
+            row.updated_at = now
+        await session.flush()
+        await session.commit()
+
+
+async def add_template_submission_log(user_id: int, combo_name: str, template_types: list[int]) -> None:
+    now = datetime.now(timezone.utc)
+    csv_value = ",".join(str(item) for item in template_types)[:500]
+    async with SessionLocal() as session:
+        row = TemplateSubmissionLog(
+            telegram_user_id=user_id,
+            combo_name=combo_name.strip()[:80],
+            templates_csv=csv_value,
+            created_at=now,
+        )
+        session.add(row)
+        await session.flush()
+        await session.commit()
+
+
+async def get_recent_template_submissions(limit: int = 100) -> list[TemplateSubmissionLog]:
+    effective_limit = max(1, min(limit, 300))
+    async with SessionLocal() as session:
+        result = await session.execute(
+            select(TemplateSubmissionLog)
+            .order_by(TemplateSubmissionLog.created_at.desc(), TemplateSubmissionLog.id.desc())
+            .limit(effective_limit)
+        )
+        return list(result.scalars().all())

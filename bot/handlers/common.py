@@ -17,14 +17,19 @@ from aiogram.types import FSInputFile, Message, ReplyKeyboardRemove
 from bot.config import load_settings
 from bot.db import (
     add_presentation_history,
+    add_template_submission_log,
     add_user_tokens,
     get_all_users,
+    get_global_template_combos,
     get_recent_user_events,
+    get_recent_template_submissions,
     get_user_data,
     get_user_presentation_history,
     get_user_template_combos,
+    remove_user_tokens,
     set_user_language,
     try_spend_user_token,
+    upsert_global_template_combo,
     upsert_user_template_combo,
 )
 from bot.i18n import color_hex_by_text, detect_language, is_action_text, t
@@ -159,11 +164,23 @@ class PresentationForm(StatesGroup):
 class AdminForm(StatesGroup):
     target_user_id = State()
     token_amount = State()
+    remove_target_user_id = State()
+    remove_token_amount = State()
     check_user_id = State()
+
+
+class CustomTemplateForm(StatesGroup):
+    name = State()
+    photos = State()
 
 
 def _is_admin(message: Message) -> bool:
     return bool(message.from_user and message.from_user.id == settings.admin_id)
+
+
+def _next_template_number() -> int:
+    current = list_presentation_types()
+    return (max(current) + 1) if current else 1
 
 
 async def _send_chunked_html(message: Message, lines: list[str]) -> None:
@@ -223,7 +240,9 @@ async def cmd_templates(message: Message) -> None:
                                  for num in sorted(available)),
                         parse_mode="HTML")
     
-    for template_num in sorted(available)[:5]:
+    ordered = sorted(available)
+    preview_numbers = ordered[:3] + [item for item in ordered[-3:] if item not in ordered[:3]]
+    for template_num in preview_numbers:
         await send_template_preview(message, template_num, lang)
         await message.answer("➖")
 
@@ -288,6 +307,94 @@ async def my_combos(message: Message) -> None:
     for combo in combos:
         lines.append(f"{escape(combo.name)}: {escape(combo.templates_csv)}")
     await message.answer("\n".join(lines), parse_mode="HTML")
+
+
+@router.message(Command("new_template"))
+@router.message(F.text.func(lambda value: is_action_text(value, "create_template_from_scratch")))
+async def start_custom_template_creation(message: Message, state: FSMContext) -> None:
+    if message.from_user is None:
+        return
+    lang, _ = await _lang_and_tokens(message)
+    await state.clear()
+    await state.set_state(CustomTemplateForm.name)
+    await message.answer(t(lang, "ask_custom_template_name"), reply_markup=ReplyKeyboardRemove())
+
+
+@router.message(CustomTemplateForm.name)
+async def custom_template_name_step(message: Message, state: FSMContext) -> None:
+    if message.from_user is None:
+        return
+    lang, _ = await _lang_and_tokens(message)
+    name = (message.text or "").strip()
+    if len(name) < 2:
+        await message.answer(t(lang, "combo_name_short"))
+        return
+    await state.update_data(custom_template_name=name[:80], custom_template_numbers=[])
+    await state.set_state(CustomTemplateForm.photos)
+    await message.answer(t(lang, "ask_custom_template_photos"))
+
+
+@router.message(CustomTemplateForm.photos)
+async def custom_template_photos_step(message: Message, state: FSMContext) -> None:
+    if message.from_user is None:
+        await state.clear()
+        return
+    lang, _ = await _lang_and_tokens(message)
+    done_words = {"готово", "done", "tayyor"}
+    text_value = (message.text or "").strip().casefold()
+
+    data = await state.get_data()
+    template_name = str(data.get("custom_template_name", "")).strip()
+    numbers = [int(x) for x in data.get("custom_template_numbers", [])]
+
+    if text_value in done_words:
+        if not numbers:
+            await message.answer(t(lang, "custom_template_need_photo"))
+            return
+        await upsert_user_template_combo(message.from_user.id, template_name, numbers)
+        await upsert_global_template_combo(template_name, numbers, message.from_user.id)
+        await add_template_submission_log(message.from_user.id, template_name, numbers)
+
+        if settings.admin_id and settings.admin_id != message.from_user.id:
+            try:
+                await message.bot.send_message(
+                    settings.admin_id,
+                    t(
+                        "ru",
+                        "custom_template_admin_notice",
+                        user_id=message.from_user.id,
+                        name=template_name,
+                        templates=",".join(str(x) for x in numbers),
+                    ),
+                )
+            except Exception:
+                logger.warning("Failed to notify admin about template submission")
+
+        await state.clear()
+        await message.answer(
+            t(lang, "custom_template_created", name=template_name, templates=",".join(str(x) for x in numbers)),
+            reply_markup=build_main_menu(lang=lang, is_admin=_is_admin(message)),
+        )
+        return
+
+    if not message.photo:
+        await message.answer(t(lang, "source_invalid_input"))
+        return
+
+    template_num = _next_template_number()
+    while any((ASSETS_DIR / f"{template_num}{suffix}").exists() for suffix in (".jpg", ".jpeg", ".png")):
+        template_num += 1
+    output_path = ASSETS_DIR / f"{template_num}.jpg"
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        await message.bot.download(message.photo[-1], destination=str(output_path))
+    except Exception:
+        await message.answer(t(lang, "build_error", error="template upload failed"))
+        return
+
+    numbers.append(template_num)
+    await state.update_data(custom_template_numbers=numbers)
+    await message.answer(t(lang, "custom_template_photo_saved", template_num=template_num))
 
 
 @router.message(Command("cancel"))
@@ -386,6 +493,49 @@ async def admin_issue_tokens_amount(message: Message, state: FSMContext) -> None
     )
 
 
+@router.message(F.text.func(lambda value: is_action_text(value, "remove_tokens")))
+async def admin_remove_tokens_start(message: Message, state: FSMContext) -> None:
+    lang, _ = await _lang_and_tokens(message)
+    if not _is_admin(message):
+        await message.answer(t(lang, "access_denied"))
+        return
+    await state.set_state(AdminForm.remove_target_user_id)
+    await message.answer(t(lang, "ask_remove_target_user_id"))
+
+
+@router.message(AdminForm.remove_target_user_id)
+async def admin_remove_tokens_target(message: Message, state: FSMContext) -> None:
+    lang, _ = await _lang_and_tokens(message)
+    text = (message.text or "").strip()
+    if not text.isdigit():
+        await message.answer(t(lang, "id_must_number"))
+        return
+    await state.update_data(remove_target_user_id=int(text))
+    await state.set_state(AdminForm.remove_token_amount)
+    await message.answer(t(lang, "ask_remove_token_amount"))
+
+
+@router.message(AdminForm.remove_token_amount)
+async def admin_remove_tokens_amount(message: Message, state: FSMContext) -> None:
+    lang, _ = await _lang_and_tokens(message)
+    text = (message.text or "").strip()
+    if not re.fullmatch(r"\d+", text):
+        await message.answer(t(lang, "amount_must_int"))
+        return
+    amount = int(text)
+    if amount <= 0:
+        await message.answer(t(lang, "amount_gt_zero"))
+        return
+    data = await state.get_data()
+    target_user_id = int(data["remove_target_user_id"])
+    new_balance = await remove_user_tokens(target_user_id, amount, settings.default_tokens)
+    await state.clear()
+    await message.answer(
+        t(lang, "tokens_removed", user_id=target_user_id, amount=amount, balance=new_balance),
+        reply_markup=build_admin_panel_menu(lang),
+    )
+
+
 @router.message(F.text.func(lambda value: is_action_text(value, "check_tokens")))
 async def admin_check_tokens_start(message: Message, state: FSMContext) -> None:
     lang, _ = await _lang_and_tokens(message)
@@ -437,6 +587,32 @@ async def admin_all_users(message: Message) -> None:
             f"<b>{user_label}</b>: <code>{user.telegram_user_id}</code> | "
             f"<b>{token_label}</b>: {user.tokens} | "
             f"<b>{lang_label}</b>: {escape(user.language)}"
+        )
+    await _send_chunked_html(message, lines)
+    await message.answer(t(lang, "admin_panel"), reply_markup=build_admin_panel_menu(lang))
+
+
+@router.message(Command("template_requests"))
+@router.message(F.text.func(lambda value: is_action_text(value, "template_requests")))
+async def admin_template_requests(message: Message) -> None:
+    lang, _ = await _lang_and_tokens(message)
+    if not _is_admin(message):
+        await message.answer(t(lang, "access_denied"))
+        return
+
+    rows = await get_recent_template_submissions(limit=100)
+    if not rows:
+        await message.answer(t(lang, "template_requests_empty"), reply_markup=build_admin_panel_menu(lang))
+        return
+
+    lines = [f"🖼 <b>{t(lang, 'template_requests_title', count=len(rows))}</b>"]
+    for row in rows:
+        created = row.created_at.strftime("%Y-%m-%d %H:%M UTC")
+        lines.append(
+            f"<b>#{row.id}</b> | {created}\n"
+            f"user=<code>{row.telegram_user_id}</code>\n"
+            f"name={escape(row.combo_name)}\n"
+            f"templates={escape(row.templates_csv)}"
         )
     await _send_chunked_html(message, lines)
     await message.answer(t(lang, "admin_panel"), reply_markup=build_admin_panel_menu(lang))
@@ -516,6 +692,7 @@ async def process_slide_count(message: Message, state: FSMContext) -> None:
         await state.clear()
         return
 
+    global_combos = await get_global_template_combos()
     user_combos = await get_user_template_combos(message.from_user.id)
     options: dict[str, list[int]] = {}
     lines = [t(lang, "choose_combo_title")]
@@ -524,6 +701,14 @@ async def process_slide_count(message: Message, state: FSMContext) -> None:
     for combo_name, combo_seq in _default_combos(sorted(available), lang):
         options[str(index)] = combo_seq
         lines.append(f"{index}. {combo_name}: {','.join(str(x) for x in combo_seq)}")
+        index += 1
+
+    for global_combo in global_combos:
+        combo_seq = _normalize_template_sequence(global_combo.templates_csv, set(available))
+        if not combo_seq:
+            continue
+        options[str(index)] = combo_seq
+        lines.append(f"{index}. [GLOBAL] {escape(global_combo.name)}: {','.join(str(x) for x in combo_seq)}")
         index += 1
 
     for user_combo in user_combos:
