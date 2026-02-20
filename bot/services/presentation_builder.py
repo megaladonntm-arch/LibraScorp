@@ -209,6 +209,8 @@ def _build_presentation_sync(
     slides: list[SlideContent],
     font_name: str,
     font_color: str,
+    creator_names: str | None = None,
+    creator_title: str = "Presentation creators",
 ) -> Path:
     presentation = Presentation()
     blank_layout = presentation.slide_layouts[6]
@@ -290,6 +292,45 @@ def _build_presentation_sync(
             paragraph.font.color.rgb = color
             paragraph.alignment = PP_ALIGN.LEFT
 
+    if creator_names:
+        final_slide = presentation.slides.add_slide(blank_layout)
+        title_box = final_slide.shapes.add_textbox(
+            left=int(presentation.slide_width * 0.10),
+            top=int(presentation.slide_height * 0.30),
+            width=int(presentation.slide_width * 0.80),
+            height=int(presentation.slide_height * 0.16),
+        )
+        title_frame = title_box.text_frame
+        title_frame.clear()
+        title_frame.vertical_anchor = MSO_ANCHOR.MIDDLE
+        title_frame.word_wrap = True
+        title_paragraph = title_frame.paragraphs[0]
+        title_paragraph.text = creator_title
+        title_paragraph.font.bold = True
+        title_paragraph.font.name = font_name
+        title_paragraph.font.size = Pt(34)
+        title_paragraph.font.color.rgb = RGBColor(0, 0, 0)
+        title_paragraph.alignment = PP_ALIGN.CENTER
+
+        names_box = final_slide.shapes.add_textbox(
+            left=int(presentation.slide_width * 0.10),
+            top=int(presentation.slide_height * 0.48),
+            width=int(presentation.slide_width * 0.80),
+            height=int(presentation.slide_height * 0.28),
+        )
+        names_frame = names_box.text_frame
+        names_frame.clear()
+        names_frame.vertical_anchor = MSO_ANCHOR.TOP
+        names_frame.word_wrap = True
+        for idx, raw_name in enumerate([x.strip() for x in creator_names.split(",") if x.strip()][:20]):
+            paragraph = names_frame.paragraphs[0] if idx == 0 else names_frame.add_paragraph()
+            paragraph.text = raw_name
+            paragraph.level = 0
+            paragraph.font.name = font_name
+            paragraph.font.size = Pt(26)
+            paragraph.font.color.rgb = RGBColor(0, 0, 0)
+            paragraph.alignment = PP_ALIGN.CENTER
+
     out_dir = Path(tempfile.mkdtemp(prefix="tg_presentation_"))
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     output_path = out_dir / f"{_safe_filename(topic)}_{stamp}.pptx"
@@ -310,6 +351,8 @@ async def build_presentation_file(
     slides: list[SlideContent],
     font_name: str,
     font_color: str,
+    creator_names: str | None = None,
+    creator_title: str = "Presentation creators",
 ) -> Path:
     return await asyncio.to_thread(
         _build_presentation_sync,
@@ -318,4 +361,6 @@ async def build_presentation_file(
         slides,
         font_name,
         font_color,
+        creator_names,
+        creator_title,
     )

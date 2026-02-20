@@ -268,6 +268,7 @@ class PresentationForm(StatesGroup):
     font_color = State()
     topic = State()
     source_material = State()
+    creator_names = State()
 
 
 class AdminForm(StatesGroup):
@@ -1116,76 +1117,9 @@ async def process_source_material(message: Message, state: FSMContext) -> None:
             await message.answer(t(lang, "source_invalid_input"))
             return
 
-        data = await state.get_data()
-        topic = str(data["topic"])
-        slide_count = int(data["slide_count"])
-        template_types = [int(x) for x in data.get("template_types", [])]
-        font_name = str(data["font_name"])
-        font_color = str(data["font_color"])
-        font_color_label = str(data["font_color_label"])
-
-        ok, tokens_left = await try_spend_user_token(message.from_user.id, settings.default_tokens)
-        if not ok:
-            await state.clear()
-            await message.answer(
-                t(lang, "no_tokens"),
-                reply_markup=build_main_menu(lang=lang, is_admin=_is_admin(message)),
-            )
-            return
-
-        await message.answer(t(lang, "generating"))
-
-        file_path: Path | None = None
-        restore_token = True
-        try:
-            slides = await generate_slide_content(
-                topic=topic,
-                slide_count=slide_count,
-                template_type=template_types[0] if template_types else 1,
-                lang=lang,
-                source_material=source_text,
-            )
-            file_path = await build_presentation_file(
-                topic=topic,
-                template_types=template_types,
-                slides=slides,
-                font_name=font_name,
-                font_color=font_color,
-            )
-            await add_presentation_history(
-                user_id=message.from_user.id,
-                topic=topic,
-                slide_count=slide_count,
-                template_types=template_types,
-                font_name=font_name,
-                font_color=font_color,
-                language=lang,
-            )
-            restore_token = False
-            await message.answer_document(
-                document=FSInputFile(file_path),
-                caption=t(
-                    lang,
-                    "ready",
-                    slides=slide_count,
-                    font=font_name,
-                    color=font_color_label,
-                    tokens=tokens_left,
-                ),
-                reply_markup=build_main_menu(lang=lang, is_admin=_is_admin(message)),
-            )
-        except Exception as e:
-            logger.error("Failed to build presentation: %s", e)
-            await message.answer(
-                t(lang, "build_error", error=escape(str(e))),
-                reply_markup=build_main_menu(lang=lang, is_admin=_is_admin(message)),
-            )
-        finally:
-            if restore_token:
-                await add_user_tokens(message.from_user.id, 1, settings.default_tokens)
-            if file_path is not None:
-                shutil.rmtree(file_path.parent, ignore_errors=True)
-            await state.clear()
+        await state.update_data(source_material=source_text)
+        await state.set_state(PresentationForm.creator_names)
+        await message.answer(t(lang, "ask_creator_names"))
     finally:
         if temp_file_path is not None:
             try:
@@ -1194,3 +1128,91 @@ async def process_source_material(message: Message, state: FSMContext) -> None:
                 pass
         if temp_dir is not None:
             shutil.rmtree(temp_dir, ignore_errors=True)
+
+
+@router.message(PresentationForm.creator_names)
+async def process_creator_names(message: Message, state: FSMContext) -> None:
+    if message.from_user is None:
+        await state.clear()
+        return
+
+    lang, _ = await _lang_and_tokens(message)
+    text_value = (message.text or "").strip()
+    skip_words = {"skip", "пропустить", "нет", "yoq", "yo'q", "o'tkazib yuborish"}
+    creator_names = None if text_value.casefold() in skip_words else text_value[:300]
+
+    data = await state.get_data()
+    topic = str(data["topic"])
+    slide_count = int(data["slide_count"])
+    template_types = [int(x) for x in data.get("template_types", [])]
+    font_name = str(data["font_name"])
+    font_color = str(data["font_color"])
+    font_color_label = str(data["font_color_label"])
+    source_text = data.get("source_material")
+    source_material = str(source_text) if isinstance(source_text, str) else None
+
+    ok, tokens_left = await try_spend_user_token(message.from_user.id, settings.default_tokens)
+    if not ok:
+        await state.clear()
+        await message.answer(
+            t(lang, "no_tokens"),
+            reply_markup=build_main_menu(lang=lang, is_admin=_is_admin(message)),
+        )
+        return
+
+    await message.answer(t(lang, "generating"))
+
+    file_path: Path | None = None
+    restore_token = True
+    extra_slide = 1 if creator_names else 0
+    try:
+        slides = await generate_slide_content(
+            topic=topic,
+            slide_count=slide_count,
+            template_type=template_types[0] if template_types else 1,
+            lang=lang,
+            source_material=source_material,
+        )
+        file_path = await build_presentation_file(
+            topic=topic,
+            template_types=template_types,
+            slides=slides,
+            font_name=font_name,
+            font_color=font_color,
+            creator_names=creator_names,
+            creator_title=t(lang, "creator_slide_title"),
+        )
+        await add_presentation_history(
+            user_id=message.from_user.id,
+            topic=topic,
+            slide_count=slide_count + extra_slide,
+            template_types=template_types,
+            font_name=font_name,
+            font_color=font_color,
+            language=lang,
+        )
+        restore_token = False
+        await message.answer_document(
+            document=FSInputFile(file_path),
+            caption=t(
+                lang,
+                "ready",
+                slides=slide_count + extra_slide,
+                font=font_name,
+                color=font_color_label,
+                tokens=tokens_left,
+            ),
+            reply_markup=build_main_menu(lang=lang, is_admin=_is_admin(message)),
+        )
+    except Exception as e:
+        logger.error("Failed to build presentation: %s", e)
+        await message.answer(
+            t(lang, "build_error", error=escape(str(e))),
+            reply_markup=build_main_menu(lang=lang, is_admin=_is_admin(message)),
+        )
+    finally:
+        if restore_token:
+            await add_user_tokens(message.from_user.id, 1, settings.default_tokens)
+        if file_path is not None:
+            shutil.rmtree(file_path.parent, ignore_errors=True)
+        await state.clear()
