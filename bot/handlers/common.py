@@ -12,7 +12,14 @@ from aiogram import F, Router
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import FSInputFile, Message, ReplyKeyboardRemove
+from aiogram.types import (
+    CallbackQuery,
+    FSInputFile,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    Message,
+    ReplyKeyboardRemove,
+)
 
 from bot.config import load_settings
 from bot.db import (
@@ -57,6 +64,7 @@ settings = load_settings()
 
 ASSETS_DIR = Path(__file__).resolve().parents[2] / "assets_pdf"
 MAX_TELEGRAM_MESSAGE_LEN = 3900
+COMBO_PAGE_SIZE = 6
 
 TEMPLATE_NAMES = {
     1: "Template 1",
@@ -70,6 +78,107 @@ TEMPLATE_NAMES = {
     9: "Template 9",
     10: "Template 10",
 }
+
+
+def _combo_tab_order() -> tuple[str, str, str]:
+    return ("default", "global", "my")
+
+
+def _combo_tab_title(lang: str, tab: str) -> str:
+    mapping = {
+        "default": t(lang, "combo_tab_default"),
+        "global": t(lang, "combo_tab_global"),
+        "my": t(lang, "combo_tab_my"),
+    }
+    return mapping.get(tab, t(lang, "combo_tab_default"))
+
+
+def _combo_label(name: str, seq: list[int]) -> str:
+    sequence = ",".join(str(x) for x in seq[:6])
+    if len(seq) > 6:
+        sequence = f"{sequence},..."
+    short_name = name if len(name) <= 24 else f"{name[:21]}..."
+    return f"{short_name} | {sequence}"
+
+
+def _build_combo_keyboard(
+    lang: str,
+    combo_groups: dict[str, list[str]],
+    combo_options: dict[str, list[int]],
+    combo_names: dict[str, str],
+    active_tab: str,
+    active_page: int,
+) -> InlineKeyboardMarkup:
+    tabs = [tab for tab in _combo_tab_order() if combo_groups.get(tab)]
+    if not tabs:
+        return InlineKeyboardMarkup(inline_keyboard=[])
+
+    if active_tab not in tabs:
+        active_tab = tabs[0]
+    keys = combo_groups.get(active_tab, [])
+    total_pages = max(1, (len(keys) + COMBO_PAGE_SIZE - 1) // COMBO_PAGE_SIZE)
+    page = max(0, min(active_page, total_pages - 1))
+    start = page * COMBO_PAGE_SIZE
+    page_keys = keys[start : start + COMBO_PAGE_SIZE]
+
+    rows: list[list[InlineKeyboardButton]] = []
+    tab_row = [
+        InlineKeyboardButton(
+            text=f"• {_combo_tab_title(lang, tab)}" if tab == active_tab else _combo_tab_title(lang, tab),
+            callback_data=f"cmb:tab:{tab}",
+        )
+        for tab in tabs
+    ]
+    rows.append(tab_row)
+
+    for key in page_keys:
+        name = combo_names.get(key, "Combo")
+        seq = combo_options.get(key, [])
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text=_combo_label(name, seq),
+                    callback_data=f"cmb:sel:{key}",
+                )
+            ]
+        )
+
+    if total_pages > 1:
+        rows.append(
+            [
+                InlineKeyboardButton(text="◀", callback_data=f"cmb:page:{max(0, page - 1)}"),
+                InlineKeyboardButton(text=f"{page + 1}/{total_pages}", callback_data="cmb:noop"),
+                InlineKeyboardButton(text="▶", callback_data=f"cmb:page:{min(total_pages - 1, page + 1)}"),
+            ]
+        )
+
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def _build_combo_caption(
+    lang: str,
+    combo_groups: dict[str, list[str]],
+    combo_options: dict[str, list[int]],
+    active_tab: str,
+    active_page: int,
+    available: list[int],
+) -> str:
+    tabs = [tab for tab in _combo_tab_order() if combo_groups.get(tab)]
+    if not tabs:
+        return t(lang, "choose_combo_hint", available=", ".join(str(x) for x in available))
+    if active_tab not in tabs:
+        active_tab = tabs[0]
+
+    tab_count = len(combo_groups.get(active_tab, []))
+    counts = " | ".join(
+        f"{_combo_tab_title(lang, tab)}: {len(combo_groups.get(tab, []))}" for tab in tabs
+    )
+    return (
+        f"🎨 <b>{t(lang, 'choose_combo_title')}</b>\n"
+        f"{counts}\n\n"
+        f"{t(lang, 'choose_combo_hint', available=', '.join(str(x) for x in available))}\n"
+        f"<b>{_combo_tab_title(lang, active_tab)}:</b> {tab_count}"
+    )
 
 
 def _normalize_template_sequence(raw: str, available: set[int]) -> list[int] | None:
@@ -694,39 +803,148 @@ async def process_slide_count(message: Message, state: FSMContext) -> None:
 
     global_combos = await get_global_template_combos()
     user_combos = await get_user_template_combos(message.from_user.id)
-    options: dict[str, list[int]] = {}
-    lines = [t(lang, "choose_combo_title")]
+    combo_options: dict[str, list[int]] = {}
+    combo_names: dict[str, str] = {}
+    combo_groups: dict[str, list[str]] = {"default": [], "global": [], "my": []}
     index = 1
 
     for combo_name, combo_seq in _default_combos(sorted(available), lang):
-        options[str(index)] = combo_seq
-        lines.append(f"{index}. {combo_name}: {','.join(str(x) for x in combo_seq)}")
+        key = f"d{index}"
+        combo_options[key] = combo_seq
+        combo_names[key] = combo_name
+        combo_groups["default"].append(key)
         index += 1
 
     for global_combo in global_combos:
         combo_seq = _normalize_template_sequence(global_combo.templates_csv, set(available))
         if not combo_seq:
             continue
-        options[str(index)] = combo_seq
-        lines.append(f"{index}. [GLOBAL] {escape(global_combo.name)}: {','.join(str(x) for x in combo_seq)}")
+        key = f"g{global_combo.id}"
+        combo_options[key] = combo_seq
+        combo_names[key] = f"[GLOBAL] {global_combo.name}"
+        combo_groups["global"].append(key)
         index += 1
 
     for user_combo in user_combos:
         combo_seq = _normalize_template_sequence(user_combo.templates_csv, set(available))
         if not combo_seq:
             continue
-        options[str(index)] = combo_seq
-        lines.append(f"{index}. [MY] {escape(user_combo.name)}: {','.join(str(x) for x in combo_seq)}")
+        key = f"m{user_combo.id}"
+        combo_options[key] = combo_seq
+        combo_names[key] = f"[MY] {user_combo.name}"
+        combo_groups["my"].append(key)
         index += 1
 
-    await state.update_data(slide_count=count, combo_options=options, template_types=[])
-    await state.set_state(PresentationForm.template_type)
-    await message.answer("\n".join(lines))
-    await message.answer(
-        t(lang, "choose_combo_hint", available=", ".join(str(x) for x in sorted(available))),
-        reply_markup=ReplyKeyboardRemove(),
+    active_tab = next((tab for tab in _combo_tab_order() if combo_groups.get(tab)), "default")
+    active_page = 0
+    keyboard = _build_combo_keyboard(
+        lang=lang,
+        combo_groups=combo_groups,
+        combo_options=combo_options,
+        combo_names=combo_names,
+        active_tab=active_tab,
+        active_page=active_page,
+    )
+    caption = _build_combo_caption(
+        lang=lang,
+        combo_groups=combo_groups,
+        combo_options=combo_options,
+        active_tab=active_tab,
+        active_page=active_page,
+        available=sorted(available),
     )
 
+    await state.update_data(
+        slide_count=count,
+        combo_options=combo_options,
+        combo_names=combo_names,
+        combo_groups=combo_groups,
+        combo_active_tab=active_tab,
+        combo_active_page=active_page,
+        template_types=[],
+    )
+    await state.set_state(PresentationForm.template_type)
+    await message.answer(caption, reply_markup=keyboard)
+
+
+
+@router.callback_query(PresentationForm.template_type, F.data.startswith("cmb:"))
+async def process_template_combo_callback(callback: CallbackQuery, state: FSMContext) -> None:
+    if callback.message is None:
+        await callback.answer()
+        return
+    if callback.data is None:
+        await callback.answer()
+        return
+
+    lang = "ru"
+    if callback.from_user is not None:
+        _, lang = await get_user_data(callback.from_user.id, settings.default_tokens)
+
+    data = await state.get_data()
+    combo_options: dict[str, list[int]] = dict(data.get("combo_options", {}))
+    combo_names: dict[str, str] = dict(data.get("combo_names", {}))
+    combo_groups: dict[str, list[str]] = dict(data.get("combo_groups", {}))
+    available = sorted(list_presentation_types())
+
+    parts = callback.data.split(":")
+    if len(parts) < 2:
+        await callback.answer()
+        return
+
+    action = parts[1]
+    active_tab = str(data.get("combo_active_tab", "default"))
+    active_page = int(data.get("combo_active_page", 0))
+
+    if action == "noop":
+        await callback.answer()
+        return
+
+    if action == "tab" and len(parts) == 3:
+        tab = parts[2]
+        if tab in combo_groups and combo_groups.get(tab):
+            active_tab = tab
+            active_page = 0
+            await state.update_data(combo_active_tab=active_tab, combo_active_page=active_page)
+        keyboard = _build_combo_keyboard(lang, combo_groups, combo_options, combo_names, active_tab, active_page)
+        caption = _build_combo_caption(lang, combo_groups, combo_options, active_tab, active_page, available)
+        try:
+            await callback.message.edit_text(caption, reply_markup=keyboard)
+        except Exception:
+            pass
+        await callback.answer()
+        return
+
+    if action == "page" and len(parts) == 3 and parts[2].isdigit():
+        active_page = int(parts[2])
+        await state.update_data(combo_active_tab=active_tab, combo_active_page=active_page)
+        keyboard = _build_combo_keyboard(lang, combo_groups, combo_options, combo_names, active_tab, active_page)
+        caption = _build_combo_caption(lang, combo_groups, combo_options, active_tab, active_page, available)
+        try:
+            await callback.message.edit_text(caption, reply_markup=keyboard)
+        except Exception:
+            pass
+        await callback.answer()
+        return
+
+    if action == "sel" and len(parts) == 3:
+        key = parts[2]
+        slide_count = int(data.get("slide_count", 0))
+        if slide_count <= 0 or key not in combo_options:
+            await callback.answer(t(lang, "combo_pick_number"), show_alert=False)
+            return
+        template_types = _expand_combo(combo_options[key], slide_count)
+        await state.update_data(template_types=template_types)
+        await state.set_state(PresentationForm.font_name)
+        await callback.message.edit_reply_markup(reply_markup=None)
+        await callback.message.answer(
+            t(lang, "combo_selected", name=escape(combo_names.get(key, "Combo")))
+        )
+        await callback.message.answer(t(lang, "ask_font"), reply_markup=build_font_menu())
+        await callback.answer()
+        return
+
+    await callback.answer()
 
 
 @router.message(PresentationForm.template_type)
@@ -744,6 +962,7 @@ async def process_template_type(message: Message, state: FSMContext) -> None:
     data = await state.get_data()
     slide_count = int(data["slide_count"])
     combo_options: dict[str, list[int]] = dict(data.get("combo_options", {}))
+    combo_names: dict[str, str] = dict(data.get("combo_names", {}))
     available_set = set(list_presentation_types())
 
     if text.casefold().startswith("new "):
@@ -771,12 +990,20 @@ async def process_template_type(message: Message, state: FSMContext) -> None:
         await message.answer(t(lang, "ask_font"), reply_markup=build_font_menu())
         return
 
-    if text not in combo_options:
+    selected_key = text
+    if text.isdigit():
+        digit = int(text)
+        default_keys = combo_options.keys()
+        selected_key = f"d{digit}" if f"d{digit}" in default_keys else text
+
+    if selected_key not in combo_options:
         await message.answer(t(lang, "combo_pick_number"))
         return
 
-    template_types = _expand_combo(combo_options[text], slide_count)
+    template_types = _expand_combo(combo_options[selected_key], slide_count)
     await state.update_data(template_types=template_types)
+    if selected_key in combo_names:
+        await message.answer(t(lang, "combo_selected", name=escape(combo_names[selected_key])))
     await state.set_state(PresentationForm.font_name)
     await message.answer(t(lang, "ask_font"), reply_markup=build_font_menu())
 

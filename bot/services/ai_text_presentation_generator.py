@@ -227,7 +227,7 @@ async def _generate_async(topic: str, slide_count: int, template_type: int, lang
     language_name = LANGUAGE_NAMES[language_code]
 
     prompt = (
-        "Create professional, well-balanced slide content for a presentation. Return strict JSON only.\n"
+        "Create deep, practical, audience-ready slide content for a presentation. Return strict JSON only.\n"
         f"Topic: {topic}\n"
         f"Slide count: {slide_count}\n"
         f"Template type: {template_type}\n\n"
@@ -241,15 +241,17 @@ async def _generate_async(topic: str, slide_count: int, template_type: int, lang
         "Rules:\n"
         "- Exactly the requested slide count.\n"
         "- 3 to 4 HIGH-QUALITY bullets per slide (not too many, but substantive).\n"
-        "- Each bullet: one complete, well-written sentence (120-150 chars). Clear and professional.\n"
+        "- Each bullet: one complete, well-written sentence (120-200 chars). Clear and professional.\n"
         "- Slide 1: engaging title slide with main topic and relevance.\n"
         "- Last slide: clear conclusions and next steps.\n"
-        "- Middle slides: key ideas with specific examples, facts, or practical advice.\n"
+        "- Middle slides: key ideas with reasons, specific examples, and practical application.\n"
         "- Write clearly and grammatically - no redundancy, every word counts.\n"
-        "- Include relevant examples, statistics, or practical tips where applicable.\n"
+        "- Explain not only facts, but also context, cause-effect, implications, and actionable recommendations.\n"
+        "- Include relevant examples, metrics, or practical tips where applicable.\n"
         "- Make the slide visually balanced - not too crowded, easy to read.\n"
         "- Each slide must have unique, non-repetitive content.\n"
-        "- Avoid one-liners and vague statements - be specific and professional.\n"
+        "- Avoid one-liners, generic statements, and obvious textbook facts.\n"
+        "- Prefer concrete, decision-useful information over abstract wording.\n"
         "- No markdown formatting, no code blocks, JSON only."
     )
 
@@ -261,7 +263,14 @@ async def _generate_async(topic: str, slide_count: int, template_type: int, lang
             response = await client.chat.completions.create(
                 model=model,
                 messages=[
-                    {"role": "system", "content": "You are a senior presentation copywriter. You produce clear, specific, audience-ready slide text."},
+                    {
+                        "role": "system",
+                        "content": (
+                            "You are a senior presentation copywriter and analyst. "
+                            "Write content that is complete, concrete, and decision-useful. "
+                            "Do not produce shallow summaries: include reasoning, implications, and practical actions."
+                        ),
+                    },
                     {"role": "user", "content": prompt},
                 ],
                 temperature=0.45,
