@@ -24,6 +24,8 @@ class Settings:
     default_tokens: int
     openrouter_api_key: str
     openrouter_models: tuple[str, ...]
+    openrouter_request_timeout_sec: int
+    openrouter_max_model_attempts: int
     database_url: str
 
 
@@ -71,5 +73,7 @@ def load_settings() -> Settings:
         default_tokens=_parse_int("DEFAULT_TOKENS", 10),
         openrouter_api_key=os.getenv("OPENROUTER_API_KEY", "").strip(),
         openrouter_models=_parse_models(),
+        openrouter_request_timeout_sec=max(10, _parse_int("OPENROUTER_TIMEOUT_SEC", 40)),
+        openrouter_max_model_attempts=max(1, _parse_int("OPENROUTER_MAX_MODEL_ATTEMPTS", 2)),
         database_url=_build_database_url(),
     )

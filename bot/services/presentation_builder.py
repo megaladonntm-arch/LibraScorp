@@ -17,6 +17,7 @@ from bot.services.ai_text_presentation_generator import SlideContent, resolve_te
 DEFAULT_TITLE_ZONE = (0.10, 0.08, 0.80, 0.16)
 DEFAULT_BODY_ZONE = (0.12, 0.28, 0.76, 0.58)
 _ZONE_CACHE: dict[str, tuple[tuple[float, float, float, float], tuple[float, float, float, float]]] = {}
+_ZONE_ANALYSIS_SIZE = (320, 240)
 
 
 def _optimize_image_quality(image_path: Path) -> Path:
@@ -36,10 +37,6 @@ def _optimize_image_quality(image_path: Path) -> Path:
         return temp_image
     except Exception:
         return image_path
-
-
-async def _optimize_image_quality_async(image_path: Path) -> Path:
-    return await asyncio.to_thread(_optimize_image_quality, image_path)
 
 
 def _safe_filename(source: str) -> str:
@@ -116,10 +113,10 @@ def _overlap_ratio(a: tuple[float, float, float, float], b: tuple[float, float, 
 
 def _generate_title_candidates() -> list[tuple[float, float, float, float]]:
     candidates: list[tuple[float, float, float, float]] = []
-    widths = [0.60, 0.68, 0.76, 0.84]
-    heights = [0.12, 0.14, 0.16, 0.18]
-    tops = [0.06, 0.09, 0.12, 0.15, 0.18]
-    offsets = [-0.10, -0.05, 0.0, 0.05, 0.10]
+    widths = [0.64, 0.76, 0.84]
+    heights = [0.12, 0.15, 0.18]
+    tops = [0.06, 0.11, 0.16]
+    offsets = [-0.08, 0.0, 0.08]
     for width in widths:
         for height in heights:
             for top in tops:
@@ -131,10 +128,10 @@ def _generate_title_candidates() -> list[tuple[float, float, float, float]]:
 
 def _generate_body_candidates() -> list[tuple[float, float, float, float]]:
     candidates: list[tuple[float, float, float, float]] = []
-    widths = [0.56, 0.64, 0.72, 0.80, 0.86]
-    heights = [0.40, 0.46, 0.52, 0.58]
-    tops = [0.22, 0.27, 0.32, 0.37]
-    offsets = [-0.12, -0.06, 0.0, 0.06, 0.12]
+    widths = [0.64, 0.76, 0.86]
+    heights = [0.44, 0.52, 0.58]
+    tops = [0.24, 0.30, 0.36]
+    offsets = [-0.10, 0.0, 0.10]
     for width in widths:
         for height in heights:
             for top in tops:
@@ -157,7 +154,8 @@ def _detect_text_zones(template_asset: Path | None) -> tuple[tuple[float, float,
 
     try:
         image = Image.open(template_asset).convert("RGB")
-        gray = image.convert("L").filter(ImageFilter.GaussianBlur(radius=1.2))
+        image.thumbnail(_ZONE_ANALYSIS_SIZE, Image.Resampling.BILINEAR)
+        gray = image.convert("L").filter(ImageFilter.GaussianBlur(radius=1.0))
         edge = gray.filter(ImageFilter.FIND_EDGES)
 
         title_candidates = _generate_title_candidates()
@@ -166,10 +164,18 @@ def _detect_text_zones(template_asset: Path | None) -> tuple[tuple[float, float,
         best_title = DEFAULT_TITLE_ZONE
         best_body = DEFAULT_BODY_ZONE
         best_score = float("inf")
+        title_ranked = sorted(
+            title_candidates,
+            key=lambda box: _zone_score(edge, gray, box, target_top=0.10, target_center_x=0.50),
+        )[:10]
+        body_ranked = sorted(
+            body_candidates,
+            key=lambda box: _zone_score(edge, gray, box, target_top=0.30, target_center_x=0.50),
+        )[:20]
 
-        for title_box in title_candidates:
+        for title_box in title_ranked:
             title_score = _zone_score(edge, gray, title_box, target_top=0.10, target_center_x=0.50)
-            for body_box in body_candidates:
+            for body_box in body_ranked:
                 gap = body_box[1] - (title_box[1] + title_box[3])
                 if gap < 0.02:
                     continue
@@ -215,6 +221,7 @@ def _build_presentation_sync(
     presentation = Presentation()
     blank_layout = presentation.slide_layouts[6]
     temp_images: list[Path] = []
+    optimized_cache: dict[str, Path] = {}
     color = _parse_hex_color(font_color)
 
     for index, slide_content in enumerate(slides):
@@ -224,9 +231,13 @@ def _build_presentation_sync(
         title_zone, body_zone = _detect_text_zones(template_asset)
 
         if template_asset:
-            optimized_image = _optimize_image_quality(template_asset)
-            if optimized_image != template_asset:
-                temp_images.append(optimized_image)
+            asset_key = str(template_asset.resolve())
+            optimized_image = optimized_cache.get(asset_key)
+            if optimized_image is None:
+                optimized_image = _optimize_image_quality(template_asset)
+                optimized_cache[asset_key] = optimized_image
+                if optimized_image != template_asset:
+                    temp_images.append(optimized_image)
             slide.shapes.add_picture(
                 str(optimized_image),
                 left=0,

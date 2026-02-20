@@ -458,9 +458,12 @@ async def _generate_async(topic: str, slide_count: int, template_type: int, lang
     )
 
     client = AsyncOpenAI(base_url="https://openrouter.ai/api/v1", api_key=api_key)
+    timeout_sec = max(10, int(settings.openrouter_request_timeout_sec))
+    max_attempts = max(1, int(settings.openrouter_max_model_attempts))
+    models = settings.openrouter_models[:max_attempts]
 
     last_error: Exception | None = None
-    for model in settings.openrouter_models:
+    for model in models:
         try:
             response = await client.chat.completions.create(
                 model=model,
@@ -476,6 +479,7 @@ async def _generate_async(topic: str, slide_count: int, template_type: int, lang
                     {"role": "user", "content": prompt},
                 ],
                 temperature=0.45,
+                timeout=timeout_sec,
             )
             content = response.choices[0].message.content or ""
             parsed = _extract_json(content)
