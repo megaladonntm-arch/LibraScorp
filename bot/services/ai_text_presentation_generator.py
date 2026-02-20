@@ -2,6 +2,7 @@
 
 import json
 import logging
+import random
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -19,6 +20,18 @@ LANGUAGE_NAMES = {
     "ru": "Russian",
     "en": "English",
     "uz": "Uzbek",
+}
+
+SLIDE_MODE_RULES = {
+    "intro": "Set context, relevance, scope, and what the audience will get.",
+    "facts": "Prioritize concrete facts, numbers, metrics, and verifiable statements.",
+    "deep": "Provide full explanation: causes, mechanisms, implications, and decisions.",
+    "interesting": "Add non-obvious insights, surprising angles, and meaningful details.",
+    "comparison": "Compare approaches/options with trade-offs and selection criteria.",
+    "case": "Use a practical scenario or mini-case with concrete actions and outcomes.",
+    "actions": "Focus on implementation steps, owners, timeline, and success metrics.",
+    "risks": "Highlight risks, constraints, failure points, and mitigation actions.",
+    "conclusion": "Summarize key takeaways, strategic priorities, and next steps.",
 }
 
 
@@ -82,88 +95,271 @@ def _normalize_language_code(lang: str | None) -> str:
     return lang if lang in LANGUAGE_NAMES else "ru"
 
 
-def _fallback_slides(topic: str, slide_count: int, lang: str) -> list[SlideContent]:
-    if lang == "en":
-        intro_title = f"{topic}: Overview and Introduction"
-        intro_bullets = [
-            "Context and relevance: why this topic matters and its business importance.",
-            "Key questions this presentation will answer with data-driven insights.",
-            "Expected outcomes and practical value for stakeholders.",
-        ]
-        body_title = f"{topic}: Detailed Analysis"
-        body_bullets = [
-            "Core concept with practical applications and real-world examples.",
-            "Key data, statistics, and evidence supporting the main idea.",
-            "Implementation guidance and best practices for effective execution.",
-        ]
-        end_title = "Conclusion and Next Steps"
-        end_bullets = [
-            "Summary of findings and key recommendations from the presentation.",
-            "Strategic priorities and action plan for implementation.",
-            "Next steps, timeline, and success metrics to measure progress.",
-        ]
-    elif lang == "uz":
-        intro_title = f"{topic}: Kirish va Ijobiy Ko'rikka Olish"
-        intro_bullets = [
-            "Kontekst va dolzarbligi: nega bu mavzu muhim va biznesga ta'sir qiladi.",
-            "Strategik savollar: taqdimot javob beradigan asosiy masalalar.",
-            "Kutilayotgan natijalar va stakeholderlar uchun amaliy foyda.",
-        ]
-        body_title = f"{topic}: Batafsil Tahlil"
-        body_bullets = [
-            "Asosiy tushuncha aqliy ta'rif va haqiqiy misollar bilan.",
-            "Tegishli ma'lumotlar, statistika va isboti qo'llaniladigan faktlar.",
-            "Amaliy ko'rsatmalar va eng yaxshi amaliyotlar bilan ijro rejasi.",
-        ]
-        end_title = "Xulosa va Keyingi Qadamlar"
-        end_bullets = [
-            "Asosiy topilmalar va eng muhim tavsiyalar qisqacha.",
-            "Strategik ustuvor yo'nalishlar va ijro rejasi.",
-            "Aniq keyingi qadamlar, vaqt jadavali va natija ko'rsatkichlari.",
-        ]
-    else:
-        intro_title = f"{topic}: Полный обзор и введение"
-        intro_bullets = [
-            "Контекст и актуальность: почему эта тема важна для организации сейчас.",
-            "Ключевые вопросы, на которые дадут ответ данные и анализ в презентации.",
-            "Ожидаемые результаты и практическая ценность для аудитории.",
-        ]
-        body_title = f"{topic}: Детальный анализ"
-        body_bullets = [
-            "Основная концепция с примерами применения и реальными сценариями.",
-            "Ключевые данные, статистика и факты, подтверждающие идеи.",
-            "Практические рекомендации и методологии для успешного внедрения.",
-        ]
-        end_title = "Выводы и следующие шаги"
-        end_bullets = [
-            "Резюме главных выводов и ключевых рекомендаций из презентации.",
-            "Стратегические приоритеты и план действий по внедрению.",
-            "Конкретные шаги, сроки и показатели для отслеживания прогресса.",
-        ]
+def _build_slide_modes(slide_count: int) -> list[str]:
+    if slide_count <= 0:
+        return []
+    if slide_count == 1:
+        return ["intro"]
 
+    middle_modes = ["facts", "deep", "interesting", "comparison", "case", "actions", "risks"]
+    rng = random.SystemRandom()
+
+    plan = ["intro"]
+    middle_needed = max(0, slide_count - 2)
+    middle: list[str] = []
+    while len(middle) < middle_needed:
+        chunk = middle_modes[:]
+        rng.shuffle(chunk)
+        middle.extend(chunk)
+    plan.extend(middle[:middle_needed])
+    plan.append("conclusion")
+    return plan
+
+
+def _mode_lines_for_prompt(slide_modes: list[str]) -> str:
+    lines: list[str] = []
+    for idx, mode in enumerate(slide_modes, start=1):
+        lines.append(f"- Slide {idx}: {SLIDE_MODE_RULES.get(mode, SLIDE_MODE_RULES['deep'])}")
+    return "\n".join(lines)
+
+
+def _fallback_mode_slide(topic: str, index: int, mode: str, lang: str) -> SlideContent:
+    if lang == "en":
+        definitions = {
+            "intro": (
+                f"{topic}: Why It Matters",
+                [
+                    "Business context, strategic relevance, and why this topic requires immediate attention now.",
+                    "Key questions this presentation will answer to support better decisions and alignment.",
+                    "Expected outcomes and practical value for stakeholders, teams, and execution planning.",
+                ],
+            ),
+            "facts": (
+                f"{topic}: Facts and Metrics ({index})",
+                [
+                    "Core facts and baseline indicators that define the current state of this topic in practice.",
+                    "Quantitative signals and measurable patterns used to evaluate performance and progress.",
+                    "Evidence-based observations showing where gains, losses, or bottlenecks appear most clearly.",
+                ],
+            ),
+            "deep": (
+                f"{topic}: Deep Analysis ({index})",
+                [
+                    "Root causes and structural drivers that shape outcomes, risks, and long-term impact.",
+                    "How key mechanisms interact in real conditions and why common assumptions may fail.",
+                    "Decision implications for leadership, process design, and resource prioritization.",
+                ],
+            ),
+            "interesting": (
+                f"{topic}: Insights and Interesting Angles ({index})",
+                [
+                    "A non-obvious insight that reframes the topic and reveals hidden leverage points.",
+                    "A meaningful detail or pattern that usually gets ignored but affects real outcomes.",
+                    "An interesting fact linked to practical interpretation rather than isolated trivia.",
+                ],
+            ),
+            "comparison": (
+                f"{topic}: Option Comparison ({index})",
+                [
+                    "Comparison of viable approaches with clear strengths, weaknesses, and use conditions.",
+                    "Trade-offs across cost, speed, quality, and operational complexity for each option.",
+                    "Selection criteria to choose the most suitable path for your current constraints.",
+                ],
+            ),
+            "case": (
+                f"{topic}: Practical Scenario ({index})",
+                [
+                    "A realistic scenario describing initial conditions, actions taken, and execution choices.",
+                    "Observed results, key turning points, and what influenced the final outcome most.",
+                    "Transferable lessons that can be applied with adjustments in your environment.",
+                ],
+            ),
+            "actions": (
+                f"{topic}: Implementation Plan ({index})",
+                [
+                    "Step-by-step implementation path with concrete actions and sequence dependencies.",
+                    "Roles, ownership, and timeline checkpoints required to keep delivery on track.",
+                    "Success metrics and feedback loops to verify impact and adjust quickly.",
+                ],
+            ),
+            "risks": (
+                f"{topic}: Risks and Mitigation ({index})",
+                [
+                    "Major risks and constraints that can derail results if not addressed early.",
+                    "Early warning indicators that help detect failure patterns before escalation.",
+                    "Mitigation actions with contingency options and accountability assignments.",
+                ],
+            ),
+            "conclusion": (
+                "Conclusion and Next Steps",
+                [
+                    "Summary of key findings and what they mean for strategy, execution, and ownership.",
+                    "Priority actions to take first, with expected impact and short-term milestones.",
+                    "A clear next-step roadmap with measurable outcomes and review checkpoints.",
+                ],
+            ),
+        }
+    elif lang == "uz":
+        definitions = {
+            "intro": (
+                f"{topic}: Nima Uchun Muhim",
+                [
+                    "Mavzuning biznesdagi o'rni, dolzarbligi va nega aynan hozir e'tibor talab qilishi.",
+                    "Taqdimot davomida javob beriladigan asosiy savollar va qarorlar uchun yo'nalish.",
+                    "Stakeholderlar uchun kutilayotgan natijalar va amaliy qiymatning aniq ko'rinishi.",
+                ],
+            ),
+            "facts": (
+                f"{topic}: Faktlar va Ko'rsatkichlar ({index})",
+                [
+                    "Joriy holatni ifodalovchi asosiy faktlar va bazaviy indikatorlar tahlili.",
+                    "Natijani baholashga xizmat qiladigan raqamlar, o'lchovlar va dinamik tendensiyalar.",
+                    "Eng katta o'sish yoki muammo nuqtalarini ko'rsatadigan dalillarga asoslangan xulosalar.",
+                ],
+            ),
+            "deep": (
+                f"{topic}: Chuqur Tahlil ({index})",
+                [
+                    "Natijalarni belgilovchi ildiz sabablari va tizimli omillarni batafsil sharhlash.",
+                    "Asosiy mexanizmlarning o'zaro ta'siri hamda noto'g'ri taxminlar xavfini ko'rsatish.",
+                    "Rahbariyat va jamoalar uchun qaror qabul qilishdagi amaliy oqibatlar.",
+                ],
+            ),
+            "interesting": (
+                f"{topic}: Qiziqarli Insightlar ({index})",
+                [
+                    "Mavzuga boshqacha qarash beradigan noan'anaviy, lekin foydali insight taqdim etish.",
+                    "Ko'pincha e'tibordan chetda qoladigan, ammo natijaga kuchli ta'sir qiladigan detal.",
+                    "Oddiy trivia emas, balki amaliy talqin beruvchi qiziqarli fakt va xulosa.",
+                ],
+            ),
+            "comparison": (
+                f"{topic}: Variantlar Taqqoslovi ({index})",
+                [
+                    "Mumkin bo'lgan yondashuvlarni kuchli va zaif tomonlari bilan taqqoslash.",
+                    "Har bir variant bo'yicha xarajat, tezlik, sifat va murakkablikdagi trade-offlar.",
+                    "Hozirgi cheklovlar ostida eng mos variantni tanlash mezonlarini berish.",
+                ],
+            ),
+            "case": (
+                f"{topic}: Amaliy Keys ({index})",
+                [
+                    "Boshlang'ich holat, qilingan harakatlar va qabul qilingan qarorlar ketma-ketligi.",
+                    "Olingan natijalar, burilish nuqtalari va eng katta ta'sir qilgan omillar.",
+                    "Sizning sharoitingizga moslab qo'llash mumkin bo'lgan amaliy darslar.",
+                ],
+            ),
+            "actions": (
+                f"{topic}: Amalga Oshirish Rejasi ({index})",
+                [
+                    "Bosqichma-bosqich ijro rejasi va har bir bosqich o'rtasidagi bog'liqliklar.",
+                    "Mas'ullar, rollar va muddatlar bo'yicha nazorat nuqtalarini belgilash.",
+                    "Natijani o'lchash KPIlari va tezkor tuzatish uchun feedback mexanizmi.",
+                ],
+            ),
+            "risks": (
+                f"{topic}: Xatarlar va Himoya ({index})",
+                [
+                    "Natijani pasaytirishi mumkin bo'lgan asosiy xatarlar va operatsion cheklovlar.",
+                    "Muammoni erta aniqlash uchun signal va indikatorlarni aniq ko'rsatish.",
+                    "Mitigatsiya choralari, zaxira variantlar va javobgarlik taqsimoti.",
+                ],
+            ),
+            "conclusion": (
+                "Xulosa va Keyingi Qadamlar",
+                [
+                    "Asosiy xulosalar va ularning strategiya hamda ijroga ta'sirini umumlashtirish.",
+                    "Eng ustuvor amallar, kutilayotgan ta'sir va qisqa muddatli milestonelar.",
+                    "Aniq keyingi qadamlar yo'l xaritasi, KPI va qayta ko'rib chiqish nuqtalari.",
+                ],
+            ),
+        }
+    else:
+        definitions = {
+            "intro": (
+                f"{topic}: Контекст и значимость",
+                [
+                    "Контекст темы, её актуальность и причины, почему ей нужно уделить внимание именно сейчас.",
+                    "Ключевые вопросы презентации, которые помогут принимать более точные управленческие решения.",
+                    "Ожидаемая практическая ценность и результат для команды, бизнеса и заинтересованных сторон.",
+                ],
+            ),
+            "facts": (
+                f"{topic}: Факты и метрики ({index})",
+                [
+                    "Ключевые факты и базовые показатели, которые описывают текущее состояние по теме.",
+                    "Измеримые метрики и наблюдаемые тенденции, важные для оценки динамики и эффективности.",
+                    "Данные и подтверждения, показывающие, где сосредоточены основные точки роста и риска.",
+                ],
+            ),
+            "deep": (
+                f"{topic}: Глубокий разбор ({index})",
+                [
+                    "Разбор первопричин и системных факторов, которые формируют результат в долгую.",
+                    "Пояснение механизмов влияния и связей, из-за которых простые решения часто не срабатывают.",
+                    "Практические выводы для стратегии, распределения ресурсов и приоритизации действий.",
+                ],
+            ),
+            "interesting": (
+                f"{topic}: Инсайты и интересные детали ({index})",
+                [
+                    "Неочевидный инсайт, который меняет взгляд на тему и открывает новую точку воздействия.",
+                    "Интересная, но прикладная деталь, которую обычно упускают, хотя она влияет на итог.",
+                    "Факт с объяснением его значения для практики, а не просто отдельная любопытная цифра.",
+                ],
+            ),
+            "comparison": (
+                f"{topic}: Сравнение подходов ({index})",
+                [
+                    "Сравнение рабочих вариантов с выделением сильных и слабых сторон каждого подхода.",
+                    "Компромиссы по стоимости, скорости, качеству и сложности внедрения в реальных условиях.",
+                    "Критерии выбора подхода с учетом текущих ограничений, целей и зрелости команды.",
+                ],
+            ),
+            "case": (
+                f"{topic}: Практический кейс ({index})",
+                [
+                    "Краткий сценарий из практики: исходные условия, действия команды и логика решений.",
+                    "Полученные результаты, поворотные моменты и факторы, повлиявшие на итог сильнее всего.",
+                    "Выводы, которые можно адаптировать и применить в вашем контексте без потери смысла.",
+                ],
+            ),
+            "actions": (
+                f"{topic}: План внедрения ({index})",
+                [
+                    "Пошаговый план реализации с понятной последовательностью действий и зависимостей.",
+                    "Роли, зоны ответственности и контрольные точки по срокам для управляемого исполнения.",
+                    "Метрики успеха и цикл обратной связи для корректировки курса по ходу внедрения.",
+                ],
+            ),
+            "risks": (
+                f"{topic}: Риски и меры ({index})",
+                [
+                    "Ключевые риски и ограничения, которые могут сорвать срок, качество или ожидаемый эффект.",
+                    "Сигналы раннего предупреждения, позволяющие заранее увидеть проблемные сценарии.",
+                    "План снижения рисков: превентивные меры, резервные варианты и ответственные роли.",
+                ],
+            ),
+            "conclusion": (
+                "Выводы и следующие шаги",
+                [
+                    "Итоговые выводы и их значение для стратегии, операционного управления и приоритетов.",
+                    "Приоритетные действия на ближайший этап с ожидаемым эффектом и контрольными точками.",
+                    "Четкий roadmap следующих шагов с измеримыми результатами и периодом ревизии.",
+                ],
+            ),
+        }
+
+    title, bullets = definitions.get(mode, definitions["deep"])
+    return SlideContent(title=title, bullets=bullets)
+
+
+def _fallback_slides(topic: str, slide_count: int, lang: str, slide_modes: list[str] | None = None) -> list[SlideContent]:
+    effective_modes = slide_modes if slide_modes and len(slide_modes) >= slide_count else _build_slide_modes(slide_count)
     slides: list[SlideContent] = []
     for i in range(1, slide_count + 1):
-        if i == 1:
-            slides.append(
-                SlideContent(
-                    title=intro_title,
-                    bullets=intro_bullets,
-                )
-            )
-        elif i == slide_count:
-            slides.append(
-                SlideContent(
-                    title=end_title,
-                    bullets=end_bullets,
-                )
-            )
-        else:
-            slides.append(
-                SlideContent(
-                    title=f"{body_title} {i}",
-                    bullets=body_bullets,
-                )
-            )
+        mode = effective_modes[i - 1] if i - 1 < len(effective_modes) else "deep"
+        slides.append(_fallback_mode_slide(topic=topic, index=i, mode=mode, lang=lang))
     return slides
 
 
@@ -225,6 +421,8 @@ async def _generate_async(topic: str, slide_count: int, template_type: int, lang
 
     language_code = _normalize_language_code(lang)
     language_name = LANGUAGE_NAMES[language_code]
+    slide_modes = _build_slide_modes(slide_count)
+    mode_plan = _mode_lines_for_prompt(slide_modes)
 
     prompt = (
         "Create deep, practical, audience-ready slide content for a presentation. Return strict JSON only.\n"
@@ -232,6 +430,8 @@ async def _generate_async(topic: str, slide_count: int, template_type: int, lang
         f"Slide count: {slide_count}\n"
         f"Template type: {template_type}\n\n"
         f"Output language: {language_name} (code: {language_code})\n\n"
+        "Per-slide style plan (follow strictly so slides differ by style):\n"
+        f"{mode_plan}\n\n"
         "Format:\n"
         "{\n"
         '  "slides": [\n'
@@ -240,6 +440,7 @@ async def _generate_async(topic: str, slide_count: int, template_type: int, lang
         "}\n\n"
         "Rules:\n"
         "- Exactly the requested slide count.\n"
+        "- Follow the per-slide style plan exactly by slide index.\n"
         "- 3 to 4 HIGH-QUALITY bullets per slide (not too many, but substantive).\n"
         "- Each bullet: one complete, well-written sentence (120-200 chars). Clear and professional.\n"
         "- Slide 1: engaging title slide with main topic and relevance.\n"
@@ -252,6 +453,7 @@ async def _generate_async(topic: str, slide_count: int, template_type: int, lang
         "- Each slide must have unique, non-repetitive content.\n"
         "- Avoid one-liners, generic statements, and obvious textbook facts.\n"
         "- Prefer concrete, decision-useful information over abstract wording.\n"
+        "- Mix styles naturally across slides: facts, full analysis, interesting insights, and practical actions.\n"
         "- No markdown formatting, no code blocks, JSON only."
     )
 
@@ -285,7 +487,7 @@ async def _generate_async(topic: str, slide_count: int, template_type: int, lang
             logger.warning("OpenRouter model failed (%s): %s", model, exc)
 
     logger.error("All OpenRouter attempts failed: %s", last_error)
-    return _fallback_slides(topic, slide_count, language_code)
+    return _fallback_slides(topic, slide_count, language_code, slide_modes=slide_modes)
 
 
 async def generate_slide_content(
