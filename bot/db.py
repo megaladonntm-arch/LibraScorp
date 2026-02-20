@@ -177,6 +177,7 @@ async def add_presentation_history(
     font_color: str,
     language: str,
 ) -> None:
+    
     async with SessionLocal() as session:
         record = PresentationHistory(
             telegram_user_id=user_id,
