@@ -26,6 +26,8 @@ class Settings:
     openrouter_models: tuple[str, ...]
     openrouter_request_timeout_sec: int
     openrouter_max_model_attempts: int
+    openai_api_key: str
+    openai_transcription_model: str
     database_url: str
 
 
@@ -75,5 +77,7 @@ def load_settings() -> Settings:
         openrouter_models=_parse_models(),
         openrouter_request_timeout_sec=max(10, _parse_int("OPENROUTER_TIMEOUT_SEC", 40)),
         openrouter_max_model_attempts=max(1, _parse_int("OPENROUTER_MAX_MODEL_ATTEMPTS", 2)),
+        openai_api_key=os.getenv("OPENAI_API_KEY", "").strip(),
+        openai_transcription_model=os.getenv("OPENAI_TRANSCRIPTION_MODEL", "gpt-4o-mini-transcribe").strip() or "gpt-4o-mini-transcribe",
         database_url=_build_database_url(),
     )

@@ -9,7 +9,7 @@ from html import escape
 from pathlib import Path
 
 from aiogram import F, Router
-from aiogram.filters import Command
+from aiogram.filters import Command, StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import (
@@ -26,14 +26,18 @@ from bot.db import (
     add_presentation_history,
     add_template_submission_log,
     add_user_tokens,
+    get_premium_users,
     get_all_users,
     get_global_template_combos,
     get_recent_user_events,
     get_recent_template_submissions,
+    is_premium_user,
     get_user_data,
     get_user_presentation_history,
     get_user_template_combos,
+    remove_premium_user,
     remove_user_tokens,
+    set_premium_user,
     set_user_language,
     try_spend_user_token,
     upsert_global_template_combo,
@@ -49,6 +53,7 @@ from bot.keyboards.main_menu import (
 )
 from bot.services.ai_text_presentation_generator import generate_slide_content, list_presentation_types
 from bot.services.presentation_builder import build_presentation_file
+from bot.services.premium_voice_chat import ask_openrouter_from_text, transcribe_voice_file
 from bot.services.source_extractor import (
     MAX_DOWNLOAD_BYTES,
     SUPPORTED_TEXT_EXTENSIONS,
@@ -308,6 +313,28 @@ async def _send_chunked_html(message: Message, lines: list[str]) -> None:
             buffer = candidate
     if buffer:
         await message.answer(buffer, parse_mode="HTML")
+
+
+async def _send_chunked_plain(message: Message, text: str) -> None:
+    payload = text.strip()
+    if not payload:
+        return
+    start = 0
+    step = MAX_TELEGRAM_MESSAGE_LEN
+    while start < len(payload):
+        await message.answer(payload[start : start + step])
+        start += step
+
+
+def _extract_command_user_id(message: Message) -> int | None:
+    text = (message.text or "").strip()
+    parts = text.split(maxsplit=1)
+    if len(parts) < 2:
+        return None
+    candidate = parts[1].strip()
+    if not candidate.isdigit():
+        return None
+    return int(candidate)
 
 
 async def _lang_and_tokens(message: Message) -> tuple[str, int]:
@@ -753,6 +780,116 @@ async def admin_event_logs(message: Message) -> None:
         )
     await _send_chunked_html(message, lines)
     await message.answer(t(lang, "admin_panel"), reply_markup=build_admin_panel_menu(lang))
+
+
+@router.message(Command("premium_add"))
+@router.message(F.text.func(lambda value: is_action_text(value, "premium_add")))
+async def admin_premium_add(message: Message) -> None:
+    lang, _ = await _lang_and_tokens(message)
+    if not _is_admin(message):
+        await message.answer(t(lang, "access_denied"))
+        return
+    target_user_id = _extract_command_user_id(message)
+    if target_user_id is None:
+        await message.answer(t(lang, "premium_add_usage"), reply_markup=build_admin_panel_menu(lang))
+        return
+    added = await set_premium_user(
+        user_id=target_user_id,
+        assigned_by_user_id=message.from_user.id if message.from_user else 0,
+    )
+    key = "premium_added" if added else "premium_already"
+    await message.answer(t(lang, key, user_id=target_user_id), reply_markup=build_admin_panel_menu(lang))
+
+
+@router.message(Command("premium_remove"))
+@router.message(F.text.func(lambda value: is_action_text(value, "premium_remove")))
+async def admin_premium_remove(message: Message) -> None:
+    lang, _ = await _lang_and_tokens(message)
+    if not _is_admin(message):
+        await message.answer(t(lang, "access_denied"))
+        return
+    target_user_id = _extract_command_user_id(message)
+    if target_user_id is None:
+        await message.answer(t(lang, "premium_remove_usage"), reply_markup=build_admin_panel_menu(lang))
+        return
+    removed = await remove_premium_user(target_user_id)
+    key = "premium_removed" if removed else "premium_not_found"
+    await message.answer(t(lang, key, user_id=target_user_id), reply_markup=build_admin_panel_menu(lang))
+
+
+@router.message(Command("premium_list"))
+@router.message(F.text.func(lambda value: is_action_text(value, "premium_list")))
+async def admin_premium_list(message: Message) -> None:
+    lang, _ = await _lang_and_tokens(message)
+    if not _is_admin(message):
+        await message.answer(t(lang, "access_denied"))
+        return
+    users = await get_premium_users(limit=200)
+    if not users:
+        await message.answer(t(lang, "premium_list_empty"), reply_markup=build_admin_panel_menu(lang))
+        return
+    lines = [f"⭐ <b>{t(lang, 'premium_list_title', count=len(users))}</b>"]
+    for row in users:
+        created = row.created_at.strftime("%Y-%m-%d %H:%M UTC")
+        lines.append(
+            f"<code>{row.telegram_user_id}</code> | by=<code>{row.assigned_by_user_id}</code> | {created}"
+        )
+    await _send_chunked_html(message, lines)
+    await message.answer(t(lang, "admin_panel"), reply_markup=build_admin_panel_menu(lang))
+
+
+@router.message(StateFilter(None), F.voice)
+async def premium_voice_chat(message: Message) -> None:
+    if message.from_user is None:
+        return
+
+    lang, _ = await _lang_and_tokens(message)
+    allowed = await is_premium_user(message.from_user.id)
+    if not allowed:
+        await message.answer(t(lang, "premium_only_voice"))
+        return
+
+    if not settings.openai_api_key.strip():
+        await message.answer(t(lang, "premium_missing_openai_key"))
+        return
+    if not settings.openrouter_api_key.strip():
+        await message.answer(t(lang, "premium_missing_openrouter_key"))
+        return
+
+    await message.answer(t(lang, "premium_voice_processing"))
+
+    temp_file_path: Path | None = None
+    temp_dir: Path | None = None
+    try:
+        temp_dir = Path(tempfile.mkdtemp(prefix="tg_voice_"))
+        temp_file_path = temp_dir / f"{message.voice.file_id}.ogg"
+        await message.bot.download(message.voice, destination=str(temp_file_path))
+
+        try:
+            transcribed_text = await transcribe_voice_file(temp_file_path, lang=lang)
+        except Exception:
+            logger.exception("Voice transcription failed")
+            await message.answer(t(lang, "premium_transcription_failed"))
+            return
+
+        await _send_chunked_plain(message, t(lang, "premium_voice_transcript", text=transcribed_text))
+
+        try:
+            ai_answer = await ask_openrouter_from_text(transcribed_text, lang=lang)
+        except Exception:
+            logger.exception("OpenRouter reply failed")
+            await message.answer(t(lang, "premium_ai_failed"))
+            return
+
+        await _send_chunked_plain(message, t(lang, "premium_voice_answer", text=ai_answer))
+    finally:
+        if temp_file_path is not None:
+            try:
+                temp_file_path.unlink(missing_ok=True)
+            except Exception:
+                pass
+        if temp_dir is not None:
+            shutil.rmtree(temp_dir, ignore_errors=True)
 
 
 @router.message(Command("presentation"))

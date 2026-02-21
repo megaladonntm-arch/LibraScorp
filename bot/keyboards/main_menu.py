@@ -22,6 +22,8 @@ def build_admin_panel_menu(lang: str) -> ReplyKeyboardMarkup:
             [KeyboardButton(text=label(lang, "issue_tokens")), KeyboardButton(text=label(lang, "remove_tokens"))],
             [KeyboardButton(text=label(lang, "check_tokens")), KeyboardButton(text=label(lang, "template_requests"))],
             [KeyboardButton(text=label(lang, "all_users")), KeyboardButton(text=label(lang, "event_logs"))],
+            [KeyboardButton(text=label(lang, "premium_add")), KeyboardButton(text=label(lang, "premium_remove"))],
+            [KeyboardButton(text=label(lang, "premium_list"))],
             [KeyboardButton(text=label(lang, "to_menu"))],
         ],
         resize_keyboard=True,

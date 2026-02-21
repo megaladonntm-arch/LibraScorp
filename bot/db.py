@@ -83,6 +83,15 @@ class TemplateSubmissionLog(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
+class PremiumUser(Base):
+    __tablename__ = "premium_users"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    telegram_user_id: Mapped[int] = mapped_column(BigInteger, unique=True, index=True, nullable=False)
+    assigned_by_user_id: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
 engine = create_async_engine(settings.database_url, future=True)
 SessionLocal = async_sessionmaker(bind=engine, expire_on_commit=False, future=True)
 
@@ -344,6 +353,58 @@ async def get_recent_template_submissions(limit: int = 100) -> list[TemplateSubm
         result = await session.execute(
             select(TemplateSubmissionLog)
             .order_by(TemplateSubmissionLog.created_at.desc(), TemplateSubmissionLog.id.desc())
+            .limit(effective_limit)
+        )
+        return list(result.scalars().all())
+
+
+async def set_premium_user(user_id: int, assigned_by_user_id: int) -> bool:
+    async with SessionLocal() as session:
+        result = await session.execute(
+            select(PremiumUser).where(PremiumUser.telegram_user_id == user_id)
+        )
+        row = result.scalar_one_or_none()
+        if row is not None:
+            return False
+        row = PremiumUser(
+            telegram_user_id=user_id,
+            assigned_by_user_id=assigned_by_user_id,
+            created_at=datetime.now(timezone.utc),
+        )
+        session.add(row)
+        await session.flush()
+        await session.commit()
+        return True
+
+
+async def remove_premium_user(user_id: int) -> bool:
+    async with SessionLocal() as session:
+        result = await session.execute(
+            select(PremiumUser).where(PremiumUser.telegram_user_id == user_id)
+        )
+        row = result.scalar_one_or_none()
+        if row is None:
+            return False
+        await session.delete(row)
+        await session.flush()
+        await session.commit()
+        return True
+
+
+async def is_premium_user(user_id: int) -> bool:
+    async with SessionLocal() as session:
+        result = await session.execute(
+            select(PremiumUser.id).where(PremiumUser.telegram_user_id == user_id)
+        )
+        return result.scalar_one_or_none() is not None
+
+
+async def get_premium_users(limit: int = 200) -> list[PremiumUser]:
+    effective_limit = max(1, min(limit, 1000))
+    async with SessionLocal() as session:
+        result = await session.execute(
+            select(PremiumUser)
+            .order_by(PremiumUser.created_at.desc(), PremiumUser.id.desc())
             .limit(effective_limit)
         )
         return list(result.scalars().all())
