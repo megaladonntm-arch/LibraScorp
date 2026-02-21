@@ -18,12 +18,12 @@ def _effective_lang(lang: str | None) -> str | None:
 
 
 async def transcribe_voice_file(voice_file_path: Path, lang: str | None = None) -> str:
-    api_key = settings.openai_api_key.strip()
+    api_key = settings.openrouter_api_key.strip()
     if not api_key:
-        raise ValueError("missing_openai_api_key")
+        raise ValueError("missing_openrouter_api_key")
 
-    client = AsyncOpenAI(api_key=api_key)
-    model = settings.openai_transcription_model.strip() or "gpt-4o-mini-transcribe"
+    client = AsyncOpenAI(base_url="https://openrouter.ai/api/v1", api_key=api_key)
+    model = "openai/gpt-4o-mini-transcribe"
 
     with voice_file_path.open("rb") as audio_file:
         transcript = await client.audio.transcriptions.create(

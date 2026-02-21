@@ -849,9 +849,6 @@ async def premium_voice_chat(message: Message) -> None:
         await message.answer(t(lang, "premium_only_voice"))
         return
 
-    if not settings.openai_api_key.strip():
-        await message.answer(t(lang, "premium_missing_openai_key"))
-        return
     if not settings.openrouter_api_key.strip():
         await message.answer(t(lang, "premium_missing_openrouter_key"))
         return
