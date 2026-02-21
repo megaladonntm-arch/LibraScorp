@@ -5,5 +5,5 @@ python-pptx==1.0.2
 Pillow==10.1.0
 SQLAlchemy==2.0.37
 aiosqlite==0.22.0
-faster-whisper==1.1.1
-requests==2.32.3
+SpeechRecognition==3.10.4
+av==16.1.0

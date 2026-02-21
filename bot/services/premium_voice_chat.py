@@ -2,48 +2,63 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import tempfile
+import wave
 from pathlib import Path
 
-from faster_whisper import WhisperModel
+import av
 from openai import AsyncOpenAI
+import speech_recognition as sr
 
 from bot.config import load_settings
 
 logger = logging.getLogger(__name__)
 settings = load_settings()
-_whisper_model: WhisperModel | None = None
 
 
 def _effective_lang(lang: str | None) -> str | None:
-    if lang in {"ru", "en", "uz"}:
-        return lang
-    return None
+    mapping = {
+        "ru": "ru-RU",
+        "en": "en-US",
+        "uz": "uz-UZ",
+    }
+    return mapping.get(lang or "", "ru-RU")
 
 
-def _get_whisper_model() -> WhisperModel:
-    global _whisper_model
-    if _whisper_model is None:
-        _whisper_model = WhisperModel(
-            settings.whisper_model_size,
-            device=settings.whisper_device,
-            compute_type=settings.whisper_compute_type,
-        )
-    return _whisper_model
+def _decode_ogg_to_wav(ogg_path: Path, wav_path: Path) -> None:
+    container = av.open(str(ogg_path))
+    stream = container.streams.audio[0]
+    resampler = av.audio.resampler.AudioResampler(format="s16", layout="mono", rate=16000)
+
+    pcm_chunks: list[bytes] = []
+    for frame in container.decode(stream):
+        for out_frame in resampler.resample(frame):
+            pcm_chunks.append(out_frame.planes[0].to_bytes())
+    for out_frame in resampler.resample(None):
+        pcm_chunks.append(out_frame.planes[0].to_bytes())
+    container.close()
+
+    if not pcm_chunks:
+        raise ValueError("empty_audio")
+
+    with wave.open(str(wav_path), "wb") as wav:
+        wav.setnchannels(1)
+        wav.setsampwidth(2)
+        wav.setframerate(16000)
+        wav.writeframes(b"".join(pcm_chunks))
 
 
 def _transcribe_sync(voice_file_path: Path, lang: str | None = None) -> str:
-    model = _get_whisper_model()
-    segments, _ = model.transcribe(
-        str(voice_file_path),
-        language=_effective_lang(lang),
-        vad_filter=True,
-        beam_size=5,
-        best_of=5,
-    )
-    text = " ".join(segment.text.strip() for segment in segments if segment.text).strip()
-    if not text:
-        raise ValueError("empty_transcription")
-    return text
+    recognizer = sr.Recognizer()
+    with tempfile.TemporaryDirectory(prefix="voice_wav_") as temp_dir:
+        wav_path = Path(temp_dir) / "voice.wav"
+        _decode_ogg_to_wav(voice_file_path, wav_path)
+        with sr.AudioFile(str(wav_path)) as source:
+            audio = recognizer.record(source)
+        text = recognizer.recognize_google(audio, language=_effective_lang(lang)).strip()
+        if not text:
+            raise ValueError("empty_transcription")
+        return text
 
 
 async def transcribe_voice_file(voice_file_path: Path, lang: str | None = None) -> str:

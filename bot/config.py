@@ -26,9 +26,6 @@ class Settings:
     openrouter_models: tuple[str, ...]
     openrouter_request_timeout_sec: int
     openrouter_max_model_attempts: int
-    whisper_model_size: str
-    whisper_device: str
-    whisper_compute_type: str
     database_url: str
 
 
@@ -78,8 +75,5 @@ def load_settings() -> Settings:
         openrouter_models=_parse_models(),
         openrouter_request_timeout_sec=max(10, _parse_int("OPENROUTER_TIMEOUT_SEC", 40)),
         openrouter_max_model_attempts=max(1, _parse_int("OPENROUTER_MAX_MODEL_ATTEMPTS", 2)),
-        whisper_model_size=os.getenv("WHISPER_MODEL_SIZE", "small").strip() or "small",
-        whisper_device=os.getenv("WHISPER_DEVICE", "cpu").strip() or "cpu",
-        whisper_compute_type=os.getenv("WHISPER_COMPUTE_TYPE", "int8").strip() or "int8",
         database_url=_build_database_url(),
     )
