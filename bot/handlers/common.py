@@ -213,36 +213,131 @@ def _expand_combo(sequence: list[int], slide_count: int) -> list[int]:
 def _default_combos(available: list[int], lang: str) -> list[tuple[str, list[int]]]:
     if not available:
         return []
-    names = {
+    labels = {
         "ru": {
             "all": "Все шаблоны по кругу",
             "forward": "Классика по возрастанию",
             "reverse": "Контраст по убыванию",
             "odd_even": "Нечетные + четные",
+            "first": "Первые {n}",
+            "last": "Последние {n}",
+            "step": "Шаг {step}, смещение {offset}",
+            "center_out": "Из центра к краям",
+            "edges_in": "От краев к центру",
+            "wave": "Волна (чередование краев)",
+            "thirds": "Блоки: 1/3 + 2/3 + 3/3",
+            "reverse_thirds": "Блоки: 3/3 + 2/3 + 1/3",
+            "rotation": "Ротация +{shift}",
         },
         "en": {
             "all": "All templates loop",
             "forward": "Classic ascending",
             "reverse": "Contrast descending",
             "odd_even": "Odd + even",
+            "first": "First {n}",
+            "last": "Last {n}",
+            "step": "Step {step}, offset {offset}",
+            "center_out": "Center to edges",
+            "edges_in": "Edges to center",
+            "wave": "Wave (edge alternation)",
+            "thirds": "Blocks: 1/3 + 2/3 + 3/3",
+            "reverse_thirds": "Blocks: 3/3 + 2/3 + 1/3",
+            "rotation": "Rotation +{shift}",
         },
         "uz": {
             "all": "Barcha shablonlar aylana",
             "forward": "Klassik o'sish",
             "reverse": "Kamayish kontrasti",
             "odd_even": "Toq + juft",
+            "first": "Birinchi {n}",
+            "last": "Oxirgi {n}",
+            "step": "Qadam {step}, siljish {offset}",
+            "center_out": "Markazdan chetlarga",
+            "edges_in": "Chetlardan markazga",
+            "wave": "To'lqin (chetdan navbatma-navbat)",
+            "thirds": "Bloklar: 1/3 + 2/3 + 3/3",
+            "reverse_thirds": "Bloklar: 3/3 + 2/3 + 1/3",
+            "rotation": "Aylantirish +{shift}",
         },
     }
-    local = names.get(lang, names["ru"])
-    forward = available[:]
-    reverse = list(reversed(available))
+    local = labels.get(lang, labels["ru"])
+
+    combos: list[tuple[str, list[int]]] = []
+    seen: set[tuple[int, ...]] = set()
+    available_set = set(available)
+
+    def add_combo(name: str, sequence: list[int]) -> None:
+        cleaned: list[int] = []
+        for item in sequence:
+            if item in available_set:
+                cleaned.append(item)
+        if not cleaned:
+            return
+        key = tuple(cleaned)
+        if key in seen:
+            return
+        seen.add(key)
+        combos.append((name, cleaned))
+
+    add_combo(local["all"], available[:])
+    add_combo(local["forward"], available[:])
+    add_combo(local["reverse"], list(reversed(available)))
     odd_even = [item for item in available if item % 2 == 1] + [item for item in available if item % 2 == 0]
-    return [
-        (local["all"], available[:]),
-        (local["forward"], forward),
-        (local["reverse"], reverse),
-        (local["odd_even"], odd_even or available[:]),
-    ]
+    add_combo(local["odd_even"], odd_even)
+
+    for n in (2, 3, 4, 5, 6):
+        add_combo(local["first"].format(n=n), available[:n])
+        add_combo(local["last"].format(n=n), available[-n:])
+
+    for step in (2, 3, 4):
+        for offset in range(step):
+            add_combo(local["step"].format(step=step, offset=offset), available[offset::step])
+
+    center = len(available) // 2
+    center_out: list[int] = []
+    left = center - 1
+    right = center
+    while left >= 0 or right < len(available):
+        if right < len(available):
+            center_out.append(available[right])
+            right += 1
+        if left >= 0:
+            center_out.append(available[left])
+            left -= 1
+    add_combo(local["center_out"], center_out)
+
+    edges_in: list[int] = []
+    l = 0
+    r = len(available) - 1
+    while l <= r:
+        edges_in.append(available[l])
+        if l != r:
+            edges_in.append(available[r])
+        l += 1
+        r -= 1
+    add_combo(local["edges_in"], edges_in)
+
+    wave: list[int] = []
+    for idx in range(len(available)):
+        if idx % 2 == 0:
+            wave.append(available[idx // 2])
+        else:
+            wave.append(available[-(idx // 2) - 1])
+    add_combo(local["wave"], wave)
+
+    third = max(1, len(available) // 3)
+    block_a = available[:third]
+    block_b = available[third : third * 2]
+    block_c = available[third * 2 :]
+    add_combo(local["thirds"], block_a + block_b + block_c)
+    add_combo(local["reverse_thirds"], block_c + block_b + block_a)
+
+    for shift in range(1, min(len(available), 12)):
+        add_combo(local["rotation"].format(shift=shift), available[shift:] + available[:shift])
+        if len(combos) >= 24:
+            break
+
+    return combos[:24]
 
 
 async def send_template_preview(message: Message, template_num: int, lang: str, color: str = None) -> None:
@@ -378,7 +473,13 @@ async def cmd_templates(message: Message) -> None:
                         parse_mode="HTML")
     
     ordered = sorted(available)
-    preview_numbers = ordered[:3] + [item for item in ordered[-3:] if item not in ordered[:3]]
+    if len(ordered) <= 10:
+        preview_numbers = ordered
+    else:
+        middle_start = max(0, (len(ordered) // 2) - 2)
+        middle_chunk = ordered[middle_start : middle_start + 4]
+        preview_numbers = ordered[:3] + middle_chunk + ordered[-3:]
+        preview_numbers = list(dict.fromkeys(preview_numbers))
     for template_num in preview_numbers:
         await send_template_preview(message, template_num, lang)
         await message.answer("➖")
