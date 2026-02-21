@@ -1,15 +1,17 @@
 from __future__ import annotations
 
-import base64
+import asyncio
 import logging
 from pathlib import Path
 
+from faster_whisper import WhisperModel
 from openai import AsyncOpenAI
 
 from bot.config import load_settings
 
 logger = logging.getLogger(__name__)
 settings = load_settings()
+_whisper_model: WhisperModel | None = None
 
 
 def _effective_lang(lang: str | None) -> str | None:
@@ -18,78 +20,34 @@ def _effective_lang(lang: str | None) -> str | None:
     return None
 
 
+def _get_whisper_model() -> WhisperModel:
+    global _whisper_model
+    if _whisper_model is None:
+        _whisper_model = WhisperModel(
+            settings.whisper_model_size,
+            device=settings.whisper_device,
+            compute_type=settings.whisper_compute_type,
+        )
+    return _whisper_model
+
+
+def _transcribe_sync(voice_file_path: Path, lang: str | None = None) -> str:
+    model = _get_whisper_model()
+    segments, _ = model.transcribe(
+        str(voice_file_path),
+        language=_effective_lang(lang),
+        vad_filter=True,
+        beam_size=5,
+        best_of=5,
+    )
+    text = " ".join(segment.text.strip() for segment in segments if segment.text).strip()
+    if not text:
+        raise ValueError("empty_transcription")
+    return text
+
+
 async def transcribe_voice_file(voice_file_path: Path, lang: str | None = None) -> str:
-    api_key = settings.openrouter_api_key.strip()
-    if not api_key:
-        raise ValueError("missing_openrouter_api_key")
-
-    client = AsyncOpenAI(base_url="https://openrouter.ai/api/v1", api_key=api_key)
-    models = settings.openrouter_models[: max(1, int(settings.openrouter_max_model_attempts))]
-    if not models:
-        raise ValueError("missing_openrouter_models")
-
-    audio_b64 = base64.b64encode(voice_file_path.read_bytes()).decode("ascii")
-    language_name = {"ru": "Russian", "en": "English", "uz": "Uzbek"}.get(lang or "", "Russian")
-
-    last_error: Exception | None = None
-    for model in models:
-        try:
-            response = await client.chat.completions.create(
-                model=model,
-                messages=[
-                    {
-                        "role": "system",
-                        "content": (
-                            "You are a speech-to-text engine. "
-                            "Return only the transcript text, without comments."
-                        ),
-                    },
-                    {
-                        "role": "user",
-                        "content": [
-                            {
-                                "type": "text",
-                                "text": (
-                                    "Transcribe this voice message very accurately. "
-                                    f"Primary language: {language_name}. "
-                                    "Keep punctuation and proper names."
-                                ),
-                            },
-                            {
-                                "type": "input_audio",
-                                "input_audio": {
-                                    "data": audio_b64,
-                                    "format": "ogg",
-                                },
-                            },
-                        ],
-                    },
-                ],
-                temperature=0,
-                timeout=max(10, int(settings.openrouter_request_timeout_sec)),
-            )
-
-            content = response.choices[0].message.content
-            if isinstance(content, str):
-                text = content.strip()
-            elif isinstance(content, list):
-                parts: list[str] = []
-                for item in content:
-                    if isinstance(item, dict) and isinstance(item.get("text"), str):
-                        parts.append(item["text"].strip())
-                text = "\n".join(part for part in parts if part).strip()
-            else:
-                text = ""
-
-            if text:
-                return text
-        except Exception as exc:
-            last_error = exc
-            logger.warning("OpenRouter transcription model failed (%s): %s", model, exc)
-
-    if last_error is not None:
-        raise last_error
-    raise ValueError("empty_transcription")
+    return await asyncio.to_thread(_transcribe_sync, voice_file_path, lang)
 
 
 async def ask_openrouter_from_text(user_text: str, lang: str = "ru") -> str:
