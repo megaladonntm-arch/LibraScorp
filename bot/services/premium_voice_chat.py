@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import logging
 from pathlib import Path
 
@@ -23,23 +24,72 @@ async def transcribe_voice_file(voice_file_path: Path, lang: str | None = None) 
         raise ValueError("missing_openrouter_api_key")
 
     client = AsyncOpenAI(base_url="https://openrouter.ai/api/v1", api_key=api_key)
-    model = "openai/gpt-4o-mini-transcribe"
+    models = settings.openrouter_models[: max(1, int(settings.openrouter_max_model_attempts))]
+    if not models:
+        raise ValueError("missing_openrouter_models")
 
-    with voice_file_path.open("rb") as audio_file:
-        transcript = await client.audio.transcriptions.create(
-            model=model,
-            file=audio_file,
-            language=_effective_lang(lang),
-            prompt=(
-                "Transcribe this audio with high accuracy. Preserve meaning exactly, "
-                "keep punctuation and speaker intent."
-            ),
-        )
+    audio_b64 = base64.b64encode(voice_file_path.read_bytes()).decode("ascii")
+    language_name = {"ru": "Russian", "en": "English", "uz": "Uzbek"}.get(lang or "", "Russian")
 
-    text = (transcript.text or "").strip()
-    if not text:
-        raise ValueError("empty_transcription")
-    return text
+    last_error: Exception | None = None
+    for model in models:
+        try:
+            response = await client.chat.completions.create(
+                model=model,
+                messages=[
+                    {
+                        "role": "system",
+                        "content": (
+                            "You are a speech-to-text engine. "
+                            "Return only the transcript text, without comments."
+                        ),
+                    },
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": (
+                                    "Transcribe this voice message very accurately. "
+                                    f"Primary language: {language_name}. "
+                                    "Keep punctuation and proper names."
+                                ),
+                            },
+                            {
+                                "type": "input_audio",
+                                "input_audio": {
+                                    "data": audio_b64,
+                                    "format": "ogg",
+                                },
+                            },
+                        ],
+                    },
+                ],
+                temperature=0,
+                timeout=max(10, int(settings.openrouter_request_timeout_sec)),
+            )
+
+            content = response.choices[0].message.content
+            if isinstance(content, str):
+                text = content.strip()
+            elif isinstance(content, list):
+                parts: list[str] = []
+                for item in content:
+                    if isinstance(item, dict) and isinstance(item.get("text"), str):
+                        parts.append(item["text"].strip())
+                text = "\n".join(part for part in parts if part).strip()
+            else:
+                text = ""
+
+            if text:
+                return text
+        except Exception as exc:
+            last_error = exc
+            logger.warning("OpenRouter transcription model failed (%s): %s", model, exc)
+
+    if last_error is not None:
+        raise last_error
+    raise ValueError("empty_transcription")
 
 
 async def ask_openrouter_from_text(user_text: str, lang: str = "ru") -> str:
