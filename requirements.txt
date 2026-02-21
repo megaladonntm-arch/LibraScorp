@@ -6,4 +6,5 @@ Pillow==10.1.0
 SQLAlchemy==2.0.37
 aiosqlite==0.22.0
 SpeechRecognition==3.10.4
-av==16.1.0
+pydub==0.25.1
+imageio-ffmpeg==0.6.0

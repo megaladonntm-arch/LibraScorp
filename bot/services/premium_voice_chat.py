@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
+import shutil
 import tempfile
-import wave
+from functools import lru_cache
 from pathlib import Path
 
-import av
 from openai import AsyncOpenAI
+from pydub import AudioSegment
 import speech_recognition as sr
 
 from bot.config import load_settings
@@ -25,27 +27,45 @@ def _effective_lang(lang: str | None) -> str | None:
     return mapping.get(lang or "", "ru-RU")
 
 
+@lru_cache(maxsize=1)
+def _resolve_ffmpeg_binary() -> str | None:
+    # Prefer explicit env override, then system ffmpeg, then bundled binary from imageio-ffmpeg.
+    for env_name in ("FFMPEG_PATH", "FFMPEG_BINARY"):
+        candidate = os.getenv(env_name, "").strip()
+        if candidate and Path(candidate).exists():
+            return candidate
+
+    system_ffmpeg = shutil.which("ffmpeg")
+    if system_ffmpeg:
+        return system_ffmpeg
+
+    try:
+        import imageio_ffmpeg
+
+        binary = imageio_ffmpeg.get_ffmpeg_exe()
+        if binary and Path(binary).exists():
+            return binary
+    except Exception:
+        logger.exception("Failed to resolve ffmpeg with imageio-ffmpeg")
+
+    return None
+
+
 def _decode_ogg_to_wav(ogg_path: Path, wav_path: Path) -> None:
-    container = av.open(str(ogg_path))
-    stream = container.streams.audio[0]
-    resampler = av.audio.resampler.AudioResampler(format="s16", layout="mono", rate=16000)
+    ffmpeg_binary = _resolve_ffmpeg_binary()
+    if not ffmpeg_binary:
+        raise RuntimeError("ffmpeg_not_found")
 
-    pcm_chunks: list[bytes] = []
-    for frame in container.decode(stream):
-        for out_frame in resampler.resample(frame):
-            pcm_chunks.append(out_frame.planes[0].to_bytes())
-    for out_frame in resampler.resample(None):
-        pcm_chunks.append(out_frame.planes[0].to_bytes())
-    container.close()
+    AudioSegment.converter = ffmpeg_binary
+    AudioSegment.ffmpeg = ffmpeg_binary
 
-    if not pcm_chunks:
+    audio = AudioSegment.from_file(str(ogg_path), format="ogg")
+    if len(audio) <= 0:
         raise ValueError("empty_audio")
 
-    with wave.open(str(wav_path), "wb") as wav:
-        wav.setnchannels(1)
-        wav.setsampwidth(2)
-        wav.setframerate(16000)
-        wav.writeframes(b"".join(pcm_chunks))
+    # Normalize for SpeechRecognition: mono, 16 kHz, 16-bit PCM.
+    normalized = audio.set_channels(1).set_frame_rate(16000).set_sample_width(2)
+    normalized.export(str(wav_path), format="wav")
 
 
 def _transcribe_sync(voice_file_path: Path, lang: str | None = None) -> str:
