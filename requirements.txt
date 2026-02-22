@@ -8,3 +8,4 @@ aiosqlite==0.22.0
 SpeechRecognition==3.10.4
 pydub==0.25.1
 imageio-ffmpeg==0.6.0
+PyMuPDF==1.26.3

@@ -52,7 +52,12 @@ from bot.keyboards.main_menu import (
     build_main_menu,
     build_premium_menu,
 )
-from bot.services.ai_text_presentation_generator import generate_slide_content, list_presentation_types
+from bot.services.ai_text_presentation_generator import (
+    BLUE_PLAYFUL_PDF_PATH,
+    BLUE_PLAYFUL_TEMPLATE_ID,
+    generate_slide_content,
+    list_presentation_types,
+)
 from bot.services.presentation_builder import build_presentation_file
 from bot.services.premium_voice_chat import ask_openrouter_from_text, transcribe_voice_file
 from bot.services.source_extractor import (
@@ -83,6 +88,7 @@ TEMPLATE_NAMES = {
     8: "Template 8",
     9: "Template 9",
     10: "Template 10",
+    BLUE_PLAYFUL_TEMPLATE_ID: "Blue Playful (PDF full)",
 }
 
 
@@ -216,6 +222,7 @@ def _default_combos(available: list[int], lang: str) -> list[tuple[str, list[int
         return []
     labels = {
         "ru": {
+            "blue_pdf": "Blue Playful PDF (полный)",
             "all": "Все шаблоны по кругу",
             "forward": "Классика по возрастанию",
             "reverse": "Контраст по убыванию",
@@ -231,6 +238,7 @@ def _default_combos(available: list[int], lang: str) -> list[tuple[str, list[int
             "rotation": "Ротация +{shift}",
         },
         "en": {
+            "blue_pdf": "Blue Playful PDF (full)",
             "all": "All templates loop",
             "forward": "Classic ascending",
             "reverse": "Contrast descending",
@@ -246,6 +254,7 @@ def _default_combos(available: list[int], lang: str) -> list[tuple[str, list[int
             "rotation": "Rotation +{shift}",
         },
         "uz": {
+            "blue_pdf": "Blue Playful PDF (to'liq)",
             "all": "Barcha shablonlar aylana",
             "forward": "Klassik o'sish",
             "reverse": "Kamayish kontrasti",
@@ -279,6 +288,9 @@ def _default_combos(available: list[int], lang: str) -> list[tuple[str, list[int
             return
         seen.add(key)
         combos.append((name, cleaned))
+
+    if BLUE_PLAYFUL_TEMPLATE_ID in available_set:
+        add_combo(local["blue_pdf"], [BLUE_PLAYFUL_TEMPLATE_ID])
 
     add_combo(local["all"], available[:])
     add_combo(local["forward"], available[:])
@@ -342,6 +354,18 @@ def _default_combos(available: list[int], lang: str) -> list[tuple[str, list[int
 
 
 async def send_template_preview(message: Message, template_num: int, lang: str, color: str = None) -> None:
+    if template_num == BLUE_PLAYFUL_TEMPLATE_ID:
+        template_name = TEMPLATE_NAMES.get(template_num, f"Template {template_num}")
+        if BLUE_PLAYFUL_PDF_PATH.exists():
+            await message.answer_document(
+                document=FSInputFile(str(BLUE_PLAYFUL_PDF_PATH)),
+                caption=f"<b>{template_name}</b>",
+                parse_mode="HTML",
+            )
+        else:
+            await message.answer(t(lang, "template_preview_missing", template=template_num))
+        return
+
     if color and template_num <= 10:
         color_map = {"blue": "", "purple": "_purple", "red": "_red", "orange": "_orange", "green": "_green"}
         color_suffix = color_map.get(color.lower(), "")

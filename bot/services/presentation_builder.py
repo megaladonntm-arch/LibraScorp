@@ -12,7 +12,16 @@ from pptx.enum.shapes import MSO_AUTO_SHAPE_TYPE
 from pptx.enum.text import MSO_ANCHOR, PP_ALIGN
 from pptx.util import Pt
 
-from bot.services.ai_text_presentation_generator import SlideContent
+from bot.services.ai_text_presentation_generator import (
+    SlideContent,
+    resolve_pdf_template_asset,
+    resolve_template_asset,
+)
+
+try:
+    import fitz  # type: ignore
+except Exception:  # pragma: no cover
+    fitz = None
 
 TITLE_ZONE = (0.08, 0.08, 0.84, 0.16)
 BODY_ZONE = (0.10, 0.26, 0.80, 0.58)
@@ -33,6 +42,8 @@ THEMES = [
     ("#F7FFF3", "#355E1D", "#9FCF5B", "#FFFFFF"),
     ("#FFF2FA", "#6C1D45", "#D77AB3", "#FFFFFF"),
 ]
+
+PDF_RENDER_SCALE = 1.8
 
 
 def _safe_filename(source: str) -> str:
@@ -166,6 +177,25 @@ def _add_nav_button(slide, text: str, left: int, top: int, width: int, height: i
     return button
 
 
+def _render_pdf_pages_to_png(pdf_path: Path) -> list[Path]:
+    if fitz is None:
+        raise RuntimeError("Для PDF-шаблона нужен пакет PyMuPDF (pip install pymupdf).")
+
+    output: list[Path] = []
+    document = fitz.open(str(pdf_path))
+    matrix = fitz.Matrix(PDF_RENDER_SCALE, PDF_RENDER_SCALE)
+    try:
+        for page_index in range(document.page_count):
+            page = document.load_page(page_index)
+            pixmap = page.get_pixmap(matrix=matrix, alpha=False)
+            image_path = Path(tempfile.mkstemp(prefix="pdf_template_", suffix=".png")[1])
+            pixmap.save(str(image_path))
+            output.append(image_path)
+    finally:
+        document.close()
+    return output
+
+
 def _build_presentation_sync(
     topic: str,
     template_types: list[int],
@@ -179,10 +209,44 @@ def _build_presentation_sync(
     blank_layout = presentation.slide_layouts[6]
     color = _parse_hex_color(font_color)
     nav_buttons: list[tuple[object, object]] = []
+    temp_images: list[Path] = []
+    pdf_pages_cache: dict[str, list[Path]] = {}
 
     for index, slide_content in enumerate(slides):
+        template_type = template_types[index] if index < len(template_types) else (template_types[0] if template_types else 1)
         slide = presentation.slides.add_slide(blank_layout)
-        _, accent_color = _add_background(slide, presentation.slide_width, presentation.slide_height, index)
+        accent_color = RGBColor(47, 75, 124)
+
+        pdf_template_path = resolve_pdf_template_asset(template_type)
+        static_image_asset = resolve_template_asset(template_type)
+
+        if pdf_template_path is not None:
+            cache_key = str(pdf_template_path.resolve())
+            pdf_pages = pdf_pages_cache.get(cache_key)
+            if pdf_pages is None:
+                pdf_pages = _render_pdf_pages_to_png(pdf_template_path)
+                pdf_pages_cache[cache_key] = pdf_pages
+                temp_images.extend(pdf_pages)
+            if not pdf_pages:
+                raise RuntimeError(f"PDF шаблон пустой: {pdf_template_path}")
+            bg_image = pdf_pages[index % len(pdf_pages)]
+            slide.shapes.add_picture(
+                str(bg_image),
+                left=0,
+                top=0,
+                width=presentation.slide_width,
+                height=presentation.slide_height,
+            )
+        elif static_image_asset is not None:
+            slide.shapes.add_picture(
+                str(static_image_asset),
+                left=0,
+                top=0,
+                width=presentation.slide_width,
+                height=presentation.slide_height,
+            )
+        else:
+            _, accent_color = _add_background(slide, presentation.slide_width, presentation.slide_height, index)
 
         title_left, title_top, title_width, title_height = _ratio_to_emu(
             TITLE_ZONE,
@@ -350,6 +414,11 @@ def _build_presentation_sync(
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     output_path = out_dir / f"{_safe_filename(topic)}_{stamp}.pptx"
     presentation.save(output_path)
+    for temp_image in temp_images:
+        try:
+            temp_image.unlink(missing_ok=True)
+        except Exception:
+            pass
     return output_path
 
 

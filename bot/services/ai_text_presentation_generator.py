@@ -16,6 +16,9 @@ logger = logging.getLogger(__name__)
 settings = load_settings()
 
 ASSETS_DIR = Path(__file__).resolve().parents[2] / "assets_pdf"
+READY_ASSETS_DIR = Path(__file__).resolve().parents[2] / "ready_assets_store"
+BLUE_PLAYFUL_PDF_PATH = READY_ASSETS_DIR / "Blue_Playful_Project_Presentation_Presentation_20260220_215206_0000.pdf"
+BLUE_PLAYFUL_TEMPLATE_ID = 1000
 LANGUAGE_NAMES = {
     "ru": "Russian",
     "en": "English",
@@ -42,16 +45,16 @@ class SlideContent:
 
 
 def list_presentation_types() -> list[int]:
-    if not ASSETS_DIR.exists():
-        return []
-
     numbers: set[int] = set()
-    for file_path in ASSETS_DIR.iterdir():
-        if not file_path.is_file():
-            continue
-        match = re.match(r"^(\d+)", file_path.stem)
-        if match:
-            numbers.add(int(match.group(1)))
+    if ASSETS_DIR.exists():
+        for file_path in ASSETS_DIR.iterdir():
+            if not file_path.is_file():
+                continue
+            match = re.match(r"^(\d+)", file_path.stem)
+            if match:
+                numbers.add(int(match.group(1)))
+    if BLUE_PLAYFUL_PDF_PATH.exists():
+        numbers.add(BLUE_PLAYFUL_TEMPLATE_ID)
     return sorted(numbers)
 
 
@@ -69,6 +72,12 @@ def resolve_template_asset(template_type: int) -> Path | None:
             continue
         if file_path.suffix.lower() in {".png", ".jpg", ".jpeg"}:
             return file_path
+    return None
+
+
+def resolve_pdf_template_asset(template_type: int) -> Path | None:
+    if template_type == BLUE_PLAYFUL_TEMPLATE_ID and BLUE_PLAYFUL_PDF_PATH.exists():
+        return BLUE_PLAYFUL_PDF_PATH
     return None
 
 
