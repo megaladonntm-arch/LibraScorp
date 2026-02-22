@@ -7,6 +7,7 @@ def build_main_menu(lang: str, is_admin: bool = False) -> ReplyKeyboardMarkup:
     keyboard = [
         [KeyboardButton(text=label(lang, "create_presentation"))],
         [KeyboardButton(text=label(lang, "my_presentations"))],
+        [KeyboardButton(text=label(lang, "premium_section"))],
         [KeyboardButton(text=label(lang, "create_template_from_scratch"))],
         [KeyboardButton(text=label(lang, "about")), KeyboardButton(text=label(lang, "help"))],
         [KeyboardButton(text=label(lang, "language"))],
@@ -59,6 +60,16 @@ def build_language_menu(lang: str) -> ReplyKeyboardMarkup:
         keyboard=[
             [KeyboardButton(text=label(lang, "choose_ru")), KeyboardButton(text=label(lang, "choose_en"))],
             [KeyboardButton(text=label(lang, "choose_uz"))],
+            [KeyboardButton(text=label(lang, "to_menu"))],
+        ],
+        resize_keyboard=True,
+    )
+
+
+def build_premium_menu(lang: str) -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text=label(lang, "premium_voice_chat"))],
             [KeyboardButton(text=label(lang, "to_menu"))],
         ],
         resize_keyboard=True,

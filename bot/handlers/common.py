@@ -50,6 +50,7 @@ from bot.keyboards.main_menu import (
     build_font_menu,
     build_language_menu,
     build_main_menu,
+    build_premium_menu,
 )
 from bot.services.ai_text_presentation_generator import generate_slide_content, list_presentation_types
 from bot.services.presentation_builder import build_presentation_file
@@ -679,6 +680,35 @@ async def open_admin_panel(message: Message, state: FSMContext) -> None:
         return
     await state.clear()
     await message.answer(t(lang, "admin_panel"), reply_markup=build_admin_panel_menu(lang))
+
+
+@router.message(Command("premium"))
+@router.message(F.text.func(lambda value: is_action_text(value, "premium_section")))
+async def open_premium_section(message: Message, state: FSMContext) -> None:
+    if message.from_user is None:
+        return
+    lang, _ = await _lang_and_tokens(message)
+    allowed = await is_premium_user(message.from_user.id)
+    if not allowed:
+        await message.answer(t(lang, "premium_section_denied"))
+        return
+    await state.clear()
+    await message.answer(
+        f"{t(lang, 'premium_section_opened')}\n\n{t(lang, 'premium_section_hint')}",
+        reply_markup=build_premium_menu(lang),
+    )
+
+
+@router.message(F.text.func(lambda value: is_action_text(value, "premium_voice_chat")))
+async def premium_voice_button(message: Message) -> None:
+    if message.from_user is None:
+        return
+    lang, _ = await _lang_and_tokens(message)
+    allowed = await is_premium_user(message.from_user.id)
+    if not allowed:
+        await message.answer(t(lang, "premium_section_denied"))
+        return
+    await message.answer(t(lang, "premium_send_voice_prompt"))
 
 
 @router.message(F.text.func(lambda value: is_action_text(value, "to_menu")))
