@@ -6,37 +6,33 @@ import tempfile
 from datetime import datetime
 from pathlib import Path
 
-from PIL import Image, ImageFilter, ImageStat
 from pptx import Presentation
 from pptx.dml.color import RGBColor
+from pptx.enum.shapes import MSO_AUTO_SHAPE_TYPE
 from pptx.enum.text import MSO_ANCHOR, PP_ALIGN
 from pptx.util import Pt
 
-from bot.services.ai_text_presentation_generator import SlideContent, resolve_template_asset
+from bot.services.ai_text_presentation_generator import SlideContent
 
-DEFAULT_TITLE_ZONE = (0.10, 0.08, 0.80, 0.16)
-DEFAULT_BODY_ZONE = (0.12, 0.28, 0.76, 0.58)
-_ZONE_CACHE: dict[str, tuple[tuple[float, float, float, float], tuple[float, float, float, float]]] = {}
-_ZONE_ANALYSIS_SIZE = (320, 240)
+TITLE_ZONE = (0.08, 0.08, 0.84, 0.16)
+BODY_ZONE = (0.10, 0.26, 0.80, 0.58)
 
-
-def _optimize_image_quality(image_path: Path) -> Path:
-    try:
-        img = Image.open(image_path)
-        temp_image = Path(tempfile.mktemp(suffix=".png"))
-        if img.mode in ("RGBA", "LA", "P"):
-            if img.mode == "P":
-                img = img.convert("RGBA")
-            elif img.mode == "LA":
-                img = img.convert("RGBA")
-            img.save(temp_image, "PNG", compress_level=9, optimize=True)
-        else:
-            if img.mode != "RGB":
-                img = img.convert("RGB")
-            img.save(temp_image, "PNG", compress_level=9, optimize=True)
-        return temp_image
-    except Exception:
-        return image_path
+# 13 visual variants; if slides >13, style repeats by modulo.
+THEMES = [
+    ("#F5F7FF", "#2F4B7C", "#6EA8FE", "#FFFFFF"),
+    ("#FFF6EA", "#8C4A1A", "#F4A261", "#FFFFFF"),
+    ("#EEF9F1", "#1B6B4A", "#7BCFA3", "#FFFFFF"),
+    ("#FFF0F4", "#8E204B", "#E87EA1", "#FFFFFF"),
+    ("#F2F3F7", "#30343F", "#8D99AE", "#FFFFFF"),
+    ("#F9F4FF", "#4C2A85", "#A98ED6", "#FFFFFF"),
+    ("#ECFBFF", "#0F5B6E", "#5EC9E2", "#FFFFFF"),
+    ("#FFF8E7", "#7B5A12", "#DDBB5A", "#FFFFFF"),
+    ("#F1FFF8", "#215E46", "#6ED7A7", "#FFFFFF"),
+    ("#FFF1EC", "#7A2E1C", "#E78A70", "#FFFFFF"),
+    ("#F0F5FF", "#1E3A8A", "#7FA8FF", "#FFFFFF"),
+    ("#F7FFF3", "#355E1D", "#9FCF5B", "#FFFFFF"),
+    ("#FFF2FA", "#6C1D45", "#D77AB3", "#FFFFFF"),
+]
 
 
 def _safe_filename(source: str) -> str:
@@ -51,6 +47,11 @@ def _parse_hex_color(color_hex: str) -> RGBColor:
     return RGBColor(int(value[0:2], 16), int(value[2:4], 16), int(value[4:6], 16))
 
 
+def _rgb_from_hex(color_hex: str) -> RGBColor:
+    value = color_hex.lstrip("#")
+    return RGBColor(int(value[0:2], 16), int(value[2:4], 16), int(value[4:6], 16))
+
+
 def _estimate_body_font_size(slide: SlideContent) -> int:
     max_len = max((len(item) for item in slide.bullets), default=0)
     bullet_count = len(slide.bullets)
@@ -59,142 +60,6 @@ def _estimate_body_font_size(slide: SlideContent) -> int:
     if bullet_count >= 4 or max_len > 110:
         return 20
     return 22
-
-
-def _clamp(value: float, low: float, high: float) -> float:
-    return max(low, min(high, value))
-
-
-def _ratio_box_to_pixels(
-    box: tuple[float, float, float, float],
-    width: int,
-    height: int,
-) -> tuple[int, int, int, int]:
-    left = int(_clamp(box[0], 0.0, 1.0) * width)
-    top = int(_clamp(box[1], 0.0, 1.0) * height)
-    right = int(_clamp(box[0] + box[2], 0.0, 1.0) * width)
-    bottom = int(_clamp(box[1] + box[3], 0.0, 1.0) * height)
-    if right <= left:
-        right = min(width, left + 1)
-    if bottom <= top:
-        bottom = min(height, top + 1)
-    return left, top, right, bottom
-
-
-def _zone_score(
-    edge_img: Image.Image,
-    gray_img: Image.Image,
-    box: tuple[float, float, float, float],
-    target_top: float,
-    target_center_x: float,
-) -> float:
-    px_box = _ratio_box_to_pixels(box, edge_img.width, edge_img.height)
-    edge_crop = edge_img.crop(px_box)
-    gray_crop = gray_img.crop(px_box)
-    edge_mean = (ImageStat.Stat(edge_crop).mean or [255.0])[0] / 255.0
-    gray_std = (ImageStat.Stat(gray_crop).stddev or [127.0])[0] / 127.0
-    center_x = box[0] + box[2] / 2.0
-    top = box[1]
-    anchor_penalty = abs(center_x - target_center_x) * 0.35 + abs(top - target_top) * 0.45
-    return edge_mean * 0.65 + gray_std * 0.25 + anchor_penalty * 0.10
-
-
-def _overlap_ratio(a: tuple[float, float, float, float], b: tuple[float, float, float, float]) -> float:
-    ax1, ay1, aw, ah = a
-    bx1, by1, bw, bh = b
-    ax2, ay2 = ax1 + aw, ay1 + ah
-    bx2, by2 = bx1 + bw, by1 + bh
-    inter_w = max(0.0, min(ax2, bx2) - max(ax1, bx1))
-    inter_h = max(0.0, min(ay2, by2) - max(ay1, by1))
-    inter = inter_w * inter_h
-    area = max(aw * ah, 1e-6)
-    return inter / area
-
-
-def _generate_title_candidates() -> list[tuple[float, float, float, float]]:
-    candidates: list[tuple[float, float, float, float]] = []
-    widths = [0.64, 0.76, 0.84]
-    heights = [0.12, 0.15, 0.18]
-    tops = [0.06, 0.11, 0.16]
-    offsets = [-0.08, 0.0, 0.08]
-    for width in widths:
-        for height in heights:
-            for top in tops:
-                for offset in offsets:
-                    left = _clamp((0.5 - width / 2.0) + offset, 0.04, 0.96 - width)
-                    candidates.append((left, top, width, height))
-    return candidates
-
-
-def _generate_body_candidates() -> list[tuple[float, float, float, float]]:
-    candidates: list[tuple[float, float, float, float]] = []
-    widths = [0.64, 0.76, 0.86]
-    heights = [0.44, 0.52, 0.58]
-    tops = [0.24, 0.30, 0.36]
-    offsets = [-0.10, 0.0, 0.10]
-    for width in widths:
-        for height in heights:
-            for top in tops:
-                for offset in offsets:
-                    left = _clamp((0.5 - width / 2.0) + offset, 0.04, 0.96 - width)
-                    if top + height > 0.96:
-                        continue
-                    candidates.append((left, top, width, height))
-    return candidates
-
-
-def _detect_text_zones(template_asset: Path | None) -> tuple[tuple[float, float, float, float], tuple[float, float, float, float]]:
-    if template_asset is None:
-        return DEFAULT_TITLE_ZONE, DEFAULT_BODY_ZONE
-
-    cache_key = str(template_asset.resolve())
-    cached = _ZONE_CACHE.get(cache_key)
-    if cached is not None:
-        return cached
-
-    try:
-        image = Image.open(template_asset).convert("RGB")
-        image.thumbnail(_ZONE_ANALYSIS_SIZE, Image.Resampling.BILINEAR)
-        gray = image.convert("L").filter(ImageFilter.GaussianBlur(radius=1.0))
-        edge = gray.filter(ImageFilter.FIND_EDGES)
-
-        title_candidates = _generate_title_candidates()
-        body_candidates = _generate_body_candidates()
-
-        best_title = DEFAULT_TITLE_ZONE
-        best_body = DEFAULT_BODY_ZONE
-        best_score = float("inf")
-        title_ranked = sorted(
-            title_candidates,
-            key=lambda box: _zone_score(edge, gray, box, target_top=0.10, target_center_x=0.50),
-        )[:10]
-        body_ranked = sorted(
-            body_candidates,
-            key=lambda box: _zone_score(edge, gray, box, target_top=0.30, target_center_x=0.50),
-        )[:20]
-
-        for title_box in title_ranked:
-            title_score = _zone_score(edge, gray, title_box, target_top=0.10, target_center_x=0.50)
-            for body_box in body_ranked:
-                gap = body_box[1] - (title_box[1] + title_box[3])
-                if gap < 0.02:
-                    continue
-                overlap = _overlap_ratio(title_box, body_box)
-                if overlap > 0.01:
-                    continue
-                body_score = _zone_score(edge, gray, body_box, target_top=0.30, target_center_x=0.50)
-                width_penalty = max(0.0, 0.70 - body_box[2]) * 0.35
-                height_penalty = max(0.0, 0.46 - body_box[3]) * 0.35
-                score = title_score + body_score + width_penalty + height_penalty
-                if score < best_score:
-                    best_score = score
-                    best_title = title_box
-                    best_body = body_box
-
-        _ZONE_CACHE[cache_key] = (best_title, best_body)
-        return best_title, best_body
-    except Exception:
-        return DEFAULT_TITLE_ZONE, DEFAULT_BODY_ZONE
 
 
 def _ratio_to_emu(
@@ -209,6 +74,98 @@ def _ratio_to_emu(
     return left, top, width, height
 
 
+def _theme_for_index(index: int) -> tuple[RGBColor, RGBColor, RGBColor, RGBColor]:
+    bg_hex, header_hex, accent_hex, card_hex = THEMES[index % len(THEMES)]
+    return (
+        _rgb_from_hex(bg_hex),
+        _rgb_from_hex(header_hex),
+        _rgb_from_hex(accent_hex),
+        _rgb_from_hex(card_hex),
+    )
+
+
+def _add_background(slide, slide_width: int, slide_height: int, index: int) -> tuple[RGBColor, RGBColor]:
+    bg_color, header_color, accent_color, card_color = _theme_for_index(index)
+
+    background = slide.shapes.add_shape(
+        MSO_AUTO_SHAPE_TYPE.RECTANGLE,
+        left=0,
+        top=0,
+        width=slide_width,
+        height=slide_height,
+    )
+    background.fill.solid()
+    background.fill.fore_color.rgb = bg_color
+    background.line.fill.background()
+
+    top_bar = slide.shapes.add_shape(
+        MSO_AUTO_SHAPE_TYPE.RECTANGLE,
+        left=0,
+        top=0,
+        width=slide_width,
+        height=int(slide_height * 0.10),
+    )
+    top_bar.fill.solid()
+    top_bar.fill.fore_color.rgb = header_color
+    top_bar.line.fill.background()
+
+    decorative_circle = slide.shapes.add_shape(
+        MSO_AUTO_SHAPE_TYPE.OVAL,
+        left=int(slide_width * 0.78),
+        top=int(slide_height * 0.72),
+        width=int(slide_width * 0.26),
+        height=int(slide_width * 0.26),
+    )
+    decorative_circle.fill.solid()
+    decorative_circle.fill.fore_color.rgb = accent_color
+    decorative_circle.fill.transparency = 0.60
+    decorative_circle.line.fill.background()
+
+    content_card = slide.shapes.add_shape(
+        MSO_AUTO_SHAPE_TYPE.ROUNDED_RECTANGLE,
+        left=int(slide_width * 0.06),
+        top=int(slide_height * 0.18),
+        width=int(slide_width * 0.88),
+        height=int(slide_height * 0.72),
+    )
+    content_card.fill.solid()
+    content_card.fill.fore_color.rgb = card_color
+    content_card.line.fill.solid()
+    content_card.line.fill.fore_color.rgb = accent_color
+    content_card.line.width = Pt(1.6)
+
+    return header_color, accent_color
+
+
+def _add_nav_button(slide, text: str, left: int, top: int, width: int, height: int, fill: RGBColor):
+    button = slide.shapes.add_shape(
+        MSO_AUTO_SHAPE_TYPE.ROUNDED_RECTANGLE,
+        left=left,
+        top=top,
+        width=width,
+        height=height,
+    )
+    button.fill.solid()
+    button.fill.fore_color.rgb = fill
+    button.line.fill.background()
+
+    frame = button.text_frame
+    frame.clear()
+    frame.margin_left = 0
+    frame.margin_right = 0
+    frame.margin_top = 0
+    frame.margin_bottom = 0
+    frame.vertical_anchor = MSO_ANCHOR.MIDDLE
+
+    paragraph = frame.paragraphs[0]
+    paragraph.text = text
+    paragraph.alignment = PP_ALIGN.CENTER
+    paragraph.font.bold = True
+    paragraph.font.size = Pt(12)
+    paragraph.font.color.rgb = RGBColor(255, 255, 255)
+    return button
+
+
 def _build_presentation_sync(
     topic: str,
     template_types: list[int],
@@ -220,34 +177,15 @@ def _build_presentation_sync(
 ) -> Path:
     presentation = Presentation()
     blank_layout = presentation.slide_layouts[6]
-    temp_images: list[Path] = []
-    optimized_cache: dict[str, Path] = {}
     color = _parse_hex_color(font_color)
+    nav_buttons: list[tuple[object, object]] = []
 
     for index, slide_content in enumerate(slides):
         slide = presentation.slides.add_slide(blank_layout)
-        template_type = template_types[index] if index < len(template_types) else template_types[0]
-        template_asset = resolve_template_asset(template_type)
-        title_zone, body_zone = _detect_text_zones(template_asset)
-
-        if template_asset:
-            asset_key = str(template_asset.resolve())
-            optimized_image = optimized_cache.get(asset_key)
-            if optimized_image is None:
-                optimized_image = _optimize_image_quality(template_asset)
-                optimized_cache[asset_key] = optimized_image
-                if optimized_image != template_asset:
-                    temp_images.append(optimized_image)
-            slide.shapes.add_picture(
-                str(optimized_image),
-                left=0,
-                top=0,
-                width=presentation.slide_width,
-                height=presentation.slide_height,
-            )
+        _, accent_color = _add_background(slide, presentation.slide_width, presentation.slide_height, index)
 
         title_left, title_top, title_width, title_height = _ratio_to_emu(
-            title_zone,
+            TITLE_ZONE,
             presentation.slide_width,
             presentation.slide_height,
         )
@@ -269,12 +207,12 @@ def _build_presentation_sync(
         title_paragraph.text = slide_content.title
         title_paragraph.font.bold = True
         title_paragraph.font.name = font_name
-        title_paragraph.font.size = Pt(36)
+        title_paragraph.font.size = Pt(34)
         title_paragraph.font.color.rgb = color
         title_paragraph.alignment = PP_ALIGN.CENTER
 
         body_left, body_top, body_width, body_height = _ratio_to_emu(
-            body_zone,
+            BODY_ZONE,
             presentation.slide_width,
             presentation.slide_height,
         )
@@ -290,7 +228,7 @@ def _build_presentation_sync(
         body_frame.margin_right = 0
         body_frame.margin_top = 0
         body_frame.margin_bottom = 0
-        body_frame.vertical_anchor = MSO_ANCHOR.MIDDLE
+        body_frame.vertical_anchor = MSO_ANCHOR.TOP
         body_frame.word_wrap = True
         body_font_size = _estimate_body_font_size(slide_content)
 
@@ -302,9 +240,41 @@ def _build_presentation_sync(
             paragraph.font.size = Pt(body_font_size)
             paragraph.font.color.rgb = color
             paragraph.alignment = PP_ALIGN.LEFT
+            paragraph.space_after = Pt(8)
+
+        nav_top = int(presentation.slide_height * 0.92)
+        nav_width = int(presentation.slide_width * 0.11)
+        nav_height = int(presentation.slide_height * 0.055)
+        prev_button = _add_nav_button(
+            slide,
+            text="Back",
+            left=int(presentation.slide_width * 0.07),
+            top=nav_top,
+            width=nav_width,
+            height=nav_height,
+            fill=accent_color,
+        )
+        next_button = _add_nav_button(
+            slide,
+            text="Next",
+            left=int(presentation.slide_width * 0.82),
+            top=nav_top,
+            width=nav_width,
+            height=nav_height,
+            fill=accent_color,
+        )
+        nav_buttons.append((prev_button, next_button))
 
     if creator_names:
+        creator_index = len(slides)
         final_slide = presentation.slides.add_slide(blank_layout)
+        _, accent_color = _add_background(
+            final_slide,
+            presentation.slide_width,
+            presentation.slide_height,
+            creator_index,
+        )
+
         title_box = final_slide.shapes.add_textbox(
             left=int(presentation.slide_width * 0.10),
             top=int(presentation.slide_height * 0.30),
@@ -320,7 +290,7 @@ def _build_presentation_sync(
         title_paragraph.font.bold = True
         title_paragraph.font.name = font_name
         title_paragraph.font.size = Pt(34)
-        title_paragraph.font.color.rgb = RGBColor(0, 0, 0)
+        title_paragraph.font.color.rgb = color
         title_paragraph.alignment = PP_ALIGN.CENTER
 
         names_box = final_slide.shapes.add_textbox(
@@ -339,20 +309,47 @@ def _build_presentation_sync(
             paragraph.level = 0
             paragraph.font.name = font_name
             paragraph.font.size = Pt(26)
-            paragraph.font.color.rgb = RGBColor(0, 0, 0)
+            paragraph.font.color.rgb = color
             paragraph.alignment = PP_ALIGN.CENTER
+
+        nav_top = int(presentation.slide_height * 0.92)
+        nav_width = int(presentation.slide_width * 0.11)
+        nav_height = int(presentation.slide_height * 0.055)
+        prev_button = _add_nav_button(
+            final_slide,
+            text="Back",
+            left=int(presentation.slide_width * 0.07),
+            top=nav_top,
+            width=nav_width,
+            height=nav_height,
+            fill=accent_color,
+        )
+        next_button = _add_nav_button(
+            final_slide,
+            text="Next",
+            left=int(presentation.slide_width * 0.82),
+            top=nav_top,
+            width=nav_width,
+            height=nav_height,
+            fill=accent_color,
+        )
+        nav_buttons.append((prev_button, next_button))
+
+    all_slides = list(presentation.slides)
+    for idx, (prev_button, next_button) in enumerate(nav_buttons):
+        try:
+            if idx > 0:
+                prev_button.click_action.target_slide = all_slides[idx - 1]
+            if idx + 1 < len(all_slides):
+                next_button.click_action.target_slide = all_slides[idx + 1]
+        except Exception:
+            # Keep visual buttons even when hyperlink assignment is unsupported.
+            pass
 
     out_dir = Path(tempfile.mkdtemp(prefix="tg_presentation_"))
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     output_path = out_dir / f"{_safe_filename(topic)}_{stamp}.pptx"
     presentation.save(output_path)
-
-    for temp_image in temp_images:
-        try:
-            temp_image.unlink()
-        except Exception:
-            pass
-
     return output_path
 
 
@@ -375,3 +372,4 @@ async def build_presentation_file(
         creator_names,
         creator_title,
     )
+
