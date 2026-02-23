@@ -6,6 +6,7 @@ import tempfile
 from datetime import datetime
 from pathlib import Path
 
+from PIL import Image, ImageStat
 from pptx import Presentation
 from pptx.dml.color import RGBColor
 from pptx.enum.shapes import MSO_AUTO_SHAPE_TYPE
@@ -25,6 +26,21 @@ except Exception:  # pragma: no cover
 
 TITLE_ZONE = (0.08, 0.08, 0.84, 0.16)
 BODY_ZONE = (0.10, 0.26, 0.80, 0.58)
+TITLE_ZONE_CANDIDATES = (
+    (0.07, 0.06, 0.86, 0.18),
+    (0.08, 0.08, 0.84, 0.16),
+    (0.10, 0.09, 0.80, 0.16),
+    (0.12, 0.10, 0.76, 0.16),
+    (0.10, 0.14, 0.80, 0.16),
+)
+BODY_ZONE_CANDIDATES = (
+    (0.08, 0.24, 0.84, 0.60),
+    (0.10, 0.26, 0.80, 0.58),
+    (0.10, 0.30, 0.80, 0.54),
+    (0.12, 0.28, 0.76, 0.56),
+    (0.12, 0.34, 0.76, 0.50),
+    (0.08, 0.32, 0.84, 0.52),
+)
 
 # 13 visual variants; if slides >13, style repeats by modulo.
 THEMES = [
@@ -83,6 +99,58 @@ def _ratio_to_emu(
     width = int(slide_width * box[2])
     height = int(slide_height * box[3])
     return left, top, width, height
+
+
+def _hex_to_rgb(color_hex: str) -> tuple[int, int, int]:
+    value = color_hex.strip().lstrip("#")
+    if len(value) != 6:
+        return 0, 0, 0
+    return int(value[0:2], 16), int(value[2:4], 16), int(value[4:6], 16)
+
+
+def _contrast_ratio(text_rgb: tuple[int, int, int], bg_luma: float) -> float:
+    text_luma = (0.2126 * text_rgb[0] + 0.7152 * text_rgb[1] + 0.0722 * text_rgb[2]) / 255.0
+    bg_norm = bg_luma / 255.0
+    lighter = max(text_luma, bg_norm) + 0.05
+    darker = min(text_luma, bg_norm) + 0.05
+    return lighter / darker
+
+
+def _score_candidate(image: Image.Image, box: tuple[float, float, float, float], text_rgb: tuple[int, int, int]) -> float:
+    width, height = image.size
+    left = int(width * box[0])
+    top = int(height * box[1])
+    right = int(width * (box[0] + box[2]))
+    bottom = int(height * (box[1] + box[3]))
+
+    if right <= left or bottom <= top:
+        return float("-inf")
+
+    cropped = image.crop((left, top, right, bottom)).convert("L")
+    stat = ImageStat.Stat(cropped)
+    mean = stat.mean[0] if stat.mean else 128.0
+    stddev = stat.stddev[0] if stat.stddev else 0.0
+    contrast = _contrast_ratio(text_rgb, mean)
+
+    # Prefer areas with strong text contrast and lower visual noise.
+    return (contrast * 120.0) + (255.0 - stddev) + (box[2] * box[3] * 25.0)
+
+
+def _detect_text_zones_from_background(
+    image_path: Path,
+    text_color_hex: str,
+) -> tuple[tuple[float, float, float, float], tuple[float, float, float, float]]:
+    try:
+        with Image.open(image_path) as image:
+            rgb = _hex_to_rgb(text_color_hex)
+            best_title = max(TITLE_ZONE_CANDIDATES, key=lambda candidate: _score_candidate(image, candidate, rgb))
+            body_candidates = [candidate for candidate in BODY_ZONE_CANDIDATES if candidate[1] >= best_title[1] + best_title[3] - 0.01]
+            if not body_candidates:
+                body_candidates = list(BODY_ZONE_CANDIDATES)
+            best_body = max(body_candidates, key=lambda candidate: _score_candidate(image, candidate, rgb))
+            return best_title, best_body
+    except Exception:
+        return TITLE_ZONE, BODY_ZONE
 
 
 def _theme_for_index(index: int) -> tuple[RGBColor, RGBColor, RGBColor, RGBColor]:
@@ -211,6 +279,7 @@ def _build_presentation_sync(
     nav_buttons: list[tuple[object, object]] = []
     temp_images: list[Path] = []
     pdf_pages_cache: dict[str, list[Path]] = {}
+    zones_cache: dict[str, tuple[tuple[float, float, float, float], tuple[float, float, float, float]]] = {}
 
     for index, slide_content in enumerate(slides):
         template_type = template_types[index] if index < len(template_types) else (template_types[0] if template_types else 1)
@@ -237,6 +306,7 @@ def _build_presentation_sync(
                 width=presentation.slide_width,
                 height=presentation.slide_height,
             )
+            zone_key = str(bg_image.resolve())
         elif static_image_asset is not None:
             slide.shapes.add_picture(
                 str(static_image_asset),
@@ -245,11 +315,23 @@ def _build_presentation_sync(
                 width=presentation.slide_width,
                 height=presentation.slide_height,
             )
+            zone_key = str(static_image_asset.resolve())
         else:
             _, accent_color = _add_background(slide, presentation.slide_width, presentation.slide_height, index)
+            zone_key = ""
+
+        if zone_key:
+            zones = zones_cache.get(zone_key)
+            if zones is None:
+                background_path = Path(zone_key)
+                zones = _detect_text_zones_from_background(background_path, font_color)
+                zones_cache[zone_key] = zones
+            title_zone, body_zone = zones
+        else:
+            title_zone, body_zone = TITLE_ZONE, BODY_ZONE
 
         title_left, title_top, title_width, title_height = _ratio_to_emu(
-            TITLE_ZONE,
+            title_zone,
             presentation.slide_width,
             presentation.slide_height,
         )
@@ -276,7 +358,7 @@ def _build_presentation_sync(
         title_paragraph.alignment = PP_ALIGN.CENTER
 
         body_left, body_top, body_width, body_height = _ratio_to_emu(
-            BODY_ZONE,
+            body_zone,
             presentation.slide_width,
             presentation.slide_height,
         )

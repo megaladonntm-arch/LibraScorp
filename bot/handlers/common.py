@@ -53,10 +53,11 @@ from bot.keyboards.main_menu import (
     build_premium_menu,
 )
 from bot.services.ai_text_presentation_generator import (
-    BLUE_PLAYFUL_PDF_PATH,
     BLUE_PLAYFUL_TEMPLATE_ID,
+    get_template_name,
     generate_slide_content,
     list_presentation_types,
+    resolve_pdf_template_asset,
 )
 from bot.services.presentation_builder import build_presentation_file
 from bot.services.premium_voice_chat import ask_openrouter_from_text, transcribe_voice_file
@@ -291,6 +292,12 @@ def _default_combos(available: list[int], lang: str) -> list[tuple[str, list[int
 
     if BLUE_PLAYFUL_TEMPLATE_ID in available_set:
         add_combo(local["blue_pdf"], [BLUE_PLAYFUL_TEMPLATE_ID])
+    for template_id in available:
+        if template_id == BLUE_PLAYFUL_TEMPLATE_ID:
+            continue
+        if resolve_pdf_template_asset(template_id) is None:
+            continue
+        add_combo(f"PDF: {get_template_name(template_id)}", [template_id])
 
     add_combo(local["all"], available[:])
     add_combo(local["forward"], available[:])
@@ -354,11 +361,12 @@ def _default_combos(available: list[int], lang: str) -> list[tuple[str, list[int
 
 
 async def send_template_preview(message: Message, template_num: int, lang: str, color: str = None) -> None:
-    if template_num == BLUE_PLAYFUL_TEMPLATE_ID:
-        template_name = TEMPLATE_NAMES.get(template_num, f"Template {template_num}")
-        if BLUE_PLAYFUL_PDF_PATH.exists():
+    pdf_path = resolve_pdf_template_asset(template_num)
+    if pdf_path is not None:
+        template_name = TEMPLATE_NAMES.get(template_num, get_template_name(template_num))
+        if pdf_path.exists():
             await message.answer_document(
-                document=FSInputFile(str(BLUE_PLAYFUL_PDF_PATH)),
+                document=FSInputFile(str(pdf_path)),
                 caption=f"<b>{template_name}</b>",
                 parse_mode="HTML",
             )
@@ -375,7 +383,7 @@ async def send_template_preview(message: Message, template_num: int, lang: str, 
     
     if template_path.exists():
         photo = FSInputFile(str(template_path))
-        template_name = TEMPLATE_NAMES.get(template_num, f"Template {template_num}")
+        template_name = TEMPLATE_NAMES.get(template_num, get_template_name(template_num))
         color_label = f" ({color.capitalize()})" if color else ""
         await message.answer_photo(
             photo=photo,
@@ -493,7 +501,7 @@ async def cmd_templates(message: Message) -> None:
         return
     
     await message.answer("📋 <b>Available Templates:</b>\n\n" + 
-                        "\n".join(f"#{num}. {TEMPLATE_NAMES.get(num, f'Template {num}')}" 
+                        "\n".join(f"#{num}. {TEMPLATE_NAMES.get(num, get_template_name(num))}" 
                                  for num in sorted(available)),
                         parse_mode="HTML")
     

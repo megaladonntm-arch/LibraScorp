@@ -19,6 +19,7 @@ ASSETS_DIR = Path(__file__).resolve().parents[2] / "assets_pdf"
 READY_ASSETS_DIR = Path(__file__).resolve().parents[2] / "ready_assets_store"
 BLUE_PLAYFUL_PDF_PATH = READY_ASSETS_DIR / "Blue_Playful_Project_Presentation_Presentation_20260220_215206_0000.pdf"
 BLUE_PLAYFUL_TEMPLATE_ID = 1000
+PDF_TEMPLATE_ID_START = BLUE_PLAYFUL_TEMPLATE_ID + 1
 LANGUAGE_NAMES = {
     "ru": "Russian",
     "en": "English",
@@ -53,9 +54,42 @@ def list_presentation_types() -> list[int]:
             match = re.match(r"^(\d+)", file_path.stem)
             if match:
                 numbers.add(int(match.group(1)))
-    if BLUE_PLAYFUL_PDF_PATH.exists():
-        numbers.add(BLUE_PLAYFUL_TEMPLATE_ID)
+    numbers.update(_pdf_templates_map().keys())
     return sorted(numbers)
+
+
+def _pdf_templates_map() -> dict[int, Path]:
+    mapping: dict[int, Path] = {}
+    if not READY_ASSETS_DIR.exists():
+        return mapping
+
+    if BLUE_PLAYFUL_PDF_PATH.exists():
+        mapping[BLUE_PLAYFUL_TEMPLATE_ID] = BLUE_PLAYFUL_PDF_PATH
+
+    remaining = sorted(
+        (
+            path
+            for path in READY_ASSETS_DIR.glob("*.pdf")
+            if path.is_file() and path.resolve() != BLUE_PLAYFUL_PDF_PATH.resolve()
+        ),
+        key=lambda p: p.name.casefold(),
+    )
+
+    template_id = PDF_TEMPLATE_ID_START
+    for path in remaining:
+        mapping[template_id] = path
+        template_id += 1
+    return mapping
+
+
+def get_template_name(template_type: int) -> str:
+    if template_type <= 999:
+        return f"Template {template_type}"
+    pdf_asset = resolve_pdf_template_asset(template_type)
+    if pdf_asset is None:
+        return f"Template {template_type}"
+    stem = re.sub(r"\s+", " ", pdf_asset.stem.replace("_", " ")).strip()
+    return stem[:80] if stem else f"PDF Template {template_type}"
 
 
 def resolve_template_asset(template_type: int) -> Path | None:
@@ -76,9 +110,7 @@ def resolve_template_asset(template_type: int) -> Path | None:
 
 
 def resolve_pdf_template_asset(template_type: int) -> Path | None:
-    if template_type == BLUE_PLAYFUL_TEMPLATE_ID and BLUE_PLAYFUL_PDF_PATH.exists():
-        return BLUE_PLAYFUL_PDF_PATH
-    return None
+    return _pdf_templates_map().get(template_type)
 
 
 def _extract_json(payload: str) -> Any:
