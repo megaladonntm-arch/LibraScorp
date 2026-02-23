@@ -253,7 +253,9 @@ def _render_pdf_pages_to_png(pdf_path: Path) -> list[Path]:
     document = fitz.open(str(pdf_path))
     matrix = fitz.Matrix(PDF_RENDER_SCALE, PDF_RENDER_SCALE)
     try:
-        for page_index in range(document.page_count):
+        # For ready-made PDF templates, skip the first page/background consistently.
+        start_page = 1 if document.page_count > 1 else 0
+        for page_index in range(start_page, document.page_count):
             page = document.load_page(page_index)
             pixmap = page.get_pixmap(matrix=matrix, alpha=False)
             image_path = Path(tempfile.mkstemp(prefix="pdf_template_", suffix=".png")[1])
