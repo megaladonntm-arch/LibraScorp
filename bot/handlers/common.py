@@ -784,7 +784,17 @@ async def admin_issue_tokens_amount(message: Message, state: FSMContext) -> None
         await message.answer(t(lang, "amount_gt_zero"))
         return
     data = await state.get_data()
-    target_user_id = int(data["target_user_id"])
+    raw_target_id = data.get("target_user_id")
+    if raw_target_id is None:
+        await state.clear()
+        await message.answer(t(lang, "action_expired_retry"), reply_markup=build_admin_panel_menu(lang))
+        return
+    try:
+        target_user_id = int(raw_target_id)
+    except (TypeError, ValueError):
+        await state.clear()
+        await message.answer(t(lang, "action_expired_retry"), reply_markup=build_admin_panel_menu(lang))
+        return
     new_balance = await add_user_tokens(target_user_id, amount, settings.default_tokens)
     await state.clear()
     await message.answer(
@@ -827,7 +837,17 @@ async def admin_remove_tokens_amount(message: Message, state: FSMContext) -> Non
         await message.answer(t(lang, "amount_gt_zero"))
         return
     data = await state.get_data()
-    target_user_id = int(data["remove_target_user_id"])
+    raw_target_id = data.get("remove_target_user_id")
+    if raw_target_id is None:
+        await state.clear()
+        await message.answer(t(lang, "action_expired_retry"), reply_markup=build_admin_panel_menu(lang))
+        return
+    try:
+        target_user_id = int(raw_target_id)
+    except (TypeError, ValueError):
+        await state.clear()
+        await message.answer(t(lang, "action_expired_retry"), reply_markup=build_admin_panel_menu(lang))
+        return
     new_balance = await remove_user_tokens(target_user_id, amount, settings.default_tokens)
     await state.clear()
     await message.answer(
@@ -1251,6 +1271,9 @@ async def process_template_type(message: Message, state: FSMContext) -> None:
     text = (message.text or "").strip()
 
     if text.lower() in ("cancel", "отмена", "bekor"):
+        if message.from_user is None:
+            await state.clear()
+            return
         await state.set_state(PresentationForm.slide_count)
         await message.answer(
             t(lang, "ask_slide_count", tokens=(await get_user_data(message.from_user.id, settings.default_tokens))[0])
@@ -1258,7 +1281,23 @@ async def process_template_type(message: Message, state: FSMContext) -> None:
         return
 
     data = await state.get_data()
-    slide_count = int(data["slide_count"])
+    raw_slide_count = data.get("slide_count")
+    if raw_slide_count is None:
+        await state.clear()
+        await message.answer(
+            t(lang, "flow_expired_restart"),
+            reply_markup=build_main_menu(lang=lang, is_admin=_is_admin(message)),
+        )
+        return
+    try:
+        slide_count = int(raw_slide_count)
+    except (TypeError, ValueError):
+        await state.clear()
+        await message.answer(
+            t(lang, "flow_expired_restart"),
+            reply_markup=build_main_menu(lang=lang, is_admin=_is_admin(message)),
+        )
+        return
     combo_options: dict[str, list[int]] = dict(data.get("combo_options", {}))
     combo_names: dict[str, str] = dict(data.get("combo_names", {}))
     available_set = set(list_presentation_types())
@@ -1439,6 +1478,16 @@ async def process_creator_names(message: Message, state: FSMContext) -> None:
     creator_names = None if text_value.casefold() in skip_words else text_value[:300]
 
     data = await state.get_data()
+    required_keys = ("topic", "slide_count", "font_name", "font_color", "font_color_label")
+    if any(key not in data for key in required_keys):
+        logger.warning("Presentation flow data is incomplete for user %s: keys=%s", message.from_user.id, list(data.keys()))
+        await state.clear()
+        await message.answer(
+            t(lang, "flow_expired_restart"),
+            reply_markup=build_main_menu(lang=lang, is_admin=_is_admin(message)),
+        )
+        return
+
     topic = str(data["topic"])
     slide_count = int(data["slide_count"])
     template_types = [int(x) for x in data.get("template_types", [])]

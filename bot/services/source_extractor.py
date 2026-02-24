@@ -85,3 +85,6 @@ def extract_text_from_url(url: str) -> str:
         extracted = parser.text()
         return normalize_source_text(extracted)
     return normalize_source_text(raw)
+
+
+    
