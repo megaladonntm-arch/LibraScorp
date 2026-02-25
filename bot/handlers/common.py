@@ -8,6 +8,7 @@ import tempfile
 from html import escape
 from pathlib import Path
 
+from PIL import Image
 from aiogram import F, Router
 from aiogram.filters import Command, StateFilter
 from aiogram.fsm.context import FSMContext
@@ -83,6 +84,9 @@ settings = load_settings()
 ASSETS_DIR = Path(__file__).resolve().parents[2] / "assets_pdf"
 MAX_TELEGRAM_MESSAGE_LEN = 3900
 COMBO_PAGE_SIZE = 6
+MAX_CUSTOM_SLIDE_IMAGE_BYTES = 10 * 1024 * 1024
+MIN_CUSTOM_SLIDE_IMAGE_WIDTH = 400
+MIN_CUSTOM_SLIDE_IMAGE_HEIGHT = 250
 
 TEMPLATE_NAMES = {
     1: "Template 1",
@@ -408,6 +412,7 @@ class PresentationForm(StatesGroup):
     topic = State()
     source_material = State()
     creator_names = State()
+    slide_images = State()
 
 
 class AdminForm(StatesGroup):
@@ -463,6 +468,133 @@ async def _send_chunked_plain(message: Message, text: str) -> None:
     while start < len(payload):
         await message.answer(payload[start : start + step])
         start += step
+
+
+def _skip_words() -> set[str]:
+    return {"skip", "пропустить", "нет", "yoq", "yo'q", "o'tkazib yuborish"}
+
+
+def _done_words() -> set[str]:
+    return {"done", "готово", "tayyor", "finish", "end"}
+
+
+async def _cleanup_slide_image_temp_dir(state: FSMContext) -> None:
+    data = await state.get_data()
+    temp_dir_value = data.get("slide_images_temp_dir")
+    if isinstance(temp_dir_value, str) and temp_dir_value.strip():
+        shutil.rmtree(temp_dir_value, ignore_errors=True)
+
+
+def _extract_supported_image_document_exts() -> tuple[str, ...]:
+    return (".jpg", ".jpeg", ".png", ".webp")
+
+
+async def _finalize_presentation_generation(
+    message: Message,
+    state: FSMContext,
+    lang: str,
+) -> None:
+    if message.from_user is None:
+        await _cleanup_slide_image_temp_dir(state)
+        await state.clear()
+        return
+
+    data = await state.get_data()
+    required_keys = ("topic", "slide_count", "font_name", "font_color", "font_color_label")
+    if any(key not in data for key in required_keys):
+        logger.warning("Presentation flow data is incomplete for user %s: keys=%s", message.from_user.id, list(data.keys()))
+        await _cleanup_slide_image_temp_dir(state)
+        await state.clear()
+        await message.answer(
+            t(lang, "flow_expired_restart"),
+            reply_markup=build_main_menu(lang=lang, is_admin=_is_admin(message)),
+        )
+        return
+
+    topic = str(data["topic"])
+    slide_count = int(data["slide_count"])
+    template_types = [int(x) for x in data.get("template_types", [])]
+    font_name = str(data["font_name"])
+    font_color = str(data["font_color"])
+    font_color_label = str(data["font_color_label"])
+    source_text = data.get("source_material")
+    source_material = str(source_text) if isinstance(source_text, str) else None
+    creator_raw = data.get("creator_names")
+    creator_names = str(creator_raw) if isinstance(creator_raw, str) and creator_raw.strip() else None
+
+    image_paths: list[str] = []
+    for item in data.get("slide_image_paths", []):
+        if isinstance(item, str) and Path(item).exists():
+            image_paths.append(item)
+
+    ok, tokens_left = await try_spend_user_token(message.from_user.id, settings.default_tokens)
+    if not ok:
+        await _cleanup_slide_image_temp_dir(state)
+        await state.clear()
+        await message.answer(
+            t(lang, "no_tokens"),
+            reply_markup=build_main_menu(lang=lang, is_admin=_is_admin(message)),
+        )
+        return
+
+    await message.answer(t(lang, "generating"))
+
+    file_path: Path | None = None
+    restore_token = True
+    extra_slide = 1 if creator_names else 0
+    try:
+        slides = await generate_slide_content(
+            topic=topic,
+            slide_count=slide_count,
+            template_type=template_types[0] if template_types else 1,
+            lang=lang,
+            source_material=source_material,
+        )
+        file_path = await build_presentation_file(
+            topic=topic,
+            template_types=template_types,
+            slides=slides,
+            font_name=font_name,
+            font_color=font_color,
+            creator_names=creator_names,
+            creator_title=t(lang, "creator_slide_title"),
+            user_image_paths=image_paths,
+        )
+        await add_presentation_history(
+            user_id=message.from_user.id,
+            topic=topic,
+            slide_count=slide_count + extra_slide,
+            template_types=template_types,
+            font_name=font_name,
+            font_color=font_color,
+            language=lang,
+        )
+        restore_token = False
+        await message.answer_document(
+            document=FSInputFile(file_path),
+            caption=t(
+                lang,
+                "ready",
+                slides=slide_count + extra_slide,
+                font=font_name,
+                color=font_color_label,
+                tokens=tokens_left,
+            ),
+            reply_markup=build_main_menu(lang=lang, is_admin=_is_admin(message)),
+        )
+    except Exception as e:
+        logger.error("Failed to build presentation: %s", e)
+        await message.answer(
+            t(lang, "build_error", error=escape(str(e))),
+            reply_markup=build_main_menu(lang=lang, is_admin=_is_admin(message)),
+        )
+    finally:
+        if restore_token:
+            await add_user_tokens(message.from_user.id, 1, settings.default_tokens)
+        if file_path is not None:
+            shutil.rmtree(file_path.parent, ignore_errors=True)
+        await _cleanup_slide_image_temp_dir(state)
+        await state.clear()
 
 
 def _extract_command_user_id(message: Message) -> int | None:
@@ -697,6 +829,7 @@ async def custom_template_photos_step(message: Message, state: FSMContext) -> No
 @router.message(Command("cancel"))
 @router.message(F.text.casefold() == "отмена")
 async def cancel_generation(message: Message, state: FSMContext) -> None:
+    await _cleanup_slide_image_temp_dir(state)
     await state.clear()
     lang, _ = await _lang_and_tokens(message)
     await message.answer(
@@ -1322,6 +1455,7 @@ async def start_presentation_generation(message: Message, state: FSMContext) -> 
         )
         return
 
+    await _cleanup_slide_image_temp_dir(state)
     await state.clear()
     await state.set_state(PresentationForm.slide_count)
     await message.answer(
@@ -1634,7 +1768,7 @@ async def process_source_material(message: Message, state: FSMContext) -> None:
     lang, _ = await _lang_and_tokens(message)
     source_text: str | None = None
     text_value = (message.text or "").strip()
-    skip_words = {"skip", "пропустить", "нет", "yoq", "yo'q", "o'tkazib yuborish"}
+    skip_words = _skip_words()
 
     temp_file_path: Path | None = None
     temp_dir: Path | None = None
@@ -1711,13 +1845,14 @@ async def process_creator_names(message: Message, state: FSMContext) -> None:
 
     lang, _ = await _lang_and_tokens(message)
     text_value = (message.text or "").strip()
-    skip_words = {"skip", "пропустить", "нет", "yoq", "yo'q", "o'tkazib yuborish"}
+    skip_words = _skip_words()
     creator_names = None if text_value.casefold() in skip_words else text_value[:300]
 
     data = await state.get_data()
-    required_keys = ("topic", "slide_count", "font_name", "font_color", "font_color_label")
-    if any(key not in data for key in required_keys):
-        logger.warning("Presentation flow data is incomplete for user %s: keys=%s", message.from_user.id, list(data.keys()))
+    slide_count = int(data.get("slide_count", 0))
+    if slide_count <= 0:
+        logger.warning("Slide count missing before image upload step for user %s", message.from_user.id)
+        await _cleanup_slide_image_temp_dir(state)
         await state.clear()
         await message.answer(
             t(lang, "flow_expired_restart"),
@@ -1725,77 +1860,116 @@ async def process_creator_names(message: Message, state: FSMContext) -> None:
         )
         return
 
-    topic = str(data["topic"])
-    slide_count = int(data["slide_count"])
-    template_types = [int(x) for x in data.get("template_types", [])]
-    font_name = str(data["font_name"])
-    font_color = str(data["font_color"])
-    font_color_label = str(data["font_color_label"])
-    source_text = data.get("source_material")
-    source_material = str(source_text) if isinstance(source_text, str) else None
+    await state.update_data(
+        creator_names=creator_names,
+        slide_image_paths=[],
+        slide_images_temp_dir=None,
+    )
+    await state.set_state(PresentationForm.slide_images)
+    await message.answer(t(lang, "ask_slide_images", max_count=slide_count))
 
-    ok, tokens_left = await try_spend_user_token(message.from_user.id, settings.default_tokens)
-    if not ok:
+
+@router.message(PresentationForm.slide_images)
+async def process_slide_images(message: Message, state: FSMContext) -> None:
+    if message.from_user is None:
+        await _cleanup_slide_image_temp_dir(state)
+        await state.clear()
+        return
+
+    lang, _ = await _lang_and_tokens(message)
+    data = await state.get_data()
+    slide_count = int(data.get("slide_count", 0))
+    if slide_count <= 0:
+        await _cleanup_slide_image_temp_dir(state)
         await state.clear()
         await message.answer(
-            t(lang, "no_tokens"),
+            t(lang, "flow_expired_restart"),
             reply_markup=build_main_menu(lang=lang, is_admin=_is_admin(message)),
         )
         return
 
-    await message.answer(t(lang, "generating"))
+    stored_paths = [str(x) for x in data.get("slide_image_paths", []) if isinstance(x, str)]
+    text_value = (message.text or "").strip()
+    lowered = text_value.casefold()
+    if lowered in _skip_words():
+        stored_paths = []
+        await state.update_data(slide_image_paths=stored_paths)
+        await _finalize_presentation_generation(message, state, lang)
+        return
+    if lowered in _done_words():
+        await _finalize_presentation_generation(message, state, lang)
+        return
 
-    file_path: Path | None = None
-    restore_token = True
-    extra_slide = 1 if creator_names else 0
+    file_size = 0
+    file_suffix = ".jpg"
+    if message.photo:
+        file_size = int(message.photo[-1].file_size or 0)
+    elif message.document is not None:
+        filename = (message.document.file_name or "").lower()
+        file_suffix = Path(filename).suffix.lower() or ".jpg"
+        if file_suffix not in _extract_supported_image_document_exts():
+            await message.answer(
+                t(
+                    lang,
+                    "slide_images_file_type_unsupported",
+                    exts=", ".join(_extract_supported_image_document_exts()),
+                )
+            )
+            return
+        file_size = int(message.document.file_size or 0)
+    else:
+        await message.answer(t(lang, "slide_images_invalid_input"))
+        return
+
+    if file_size > MAX_CUSTOM_SLIDE_IMAGE_BYTES:
+        await message.answer(t(lang, "slide_images_file_too_large"))
+        return
+
+    if len(stored_paths) >= slide_count:
+        await message.answer(t(lang, "slide_images_limit_reached", max_count=slide_count))
+        await _finalize_presentation_generation(message, state, lang)
+        return
+
+    temp_dir_raw = data.get("slide_images_temp_dir")
+    if isinstance(temp_dir_raw, str) and temp_dir_raw.strip():
+        temp_dir = Path(temp_dir_raw)
+    else:
+        temp_dir = Path(tempfile.mkdtemp(prefix="tg_slide_images_"))
+        await state.update_data(slide_images_temp_dir=str(temp_dir))
+
+    destination = temp_dir / f"slide_image_{len(stored_paths)+1}{file_suffix}"
     try:
-        slides = await generate_slide_content(
-            topic=topic,
-            slide_count=slide_count,
-            template_type=template_types[0] if template_types else 1,
-            lang=lang,
-            source_material=source_material,
+        source = message.photo[-1] if message.photo else message.document
+        await message.bot.download(source, destination=str(destination))
+        with Image.open(destination) as image:
+            width, height = image.size
+            if width < MIN_CUSTOM_SLIDE_IMAGE_WIDTH or height < MIN_CUSTOM_SLIDE_IMAGE_HEIGHT:
+                destination.unlink(missing_ok=True)
+                await message.answer(
+                    t(
+                        lang,
+                        "slide_images_too_small",
+                        min_w=MIN_CUSTOM_SLIDE_IMAGE_WIDTH,
+                        min_h=MIN_CUSTOM_SLIDE_IMAGE_HEIGHT,
+                    )
+                )
+                return
+    except Exception:
+        destination.unlink(missing_ok=True)
+        await message.answer(t(lang, "slide_images_download_failed"))
+        return
+
+    stored_paths.append(str(destination))
+    await state.update_data(slide_image_paths=stored_paths)
+    await message.answer(
+        t(
+            lang,
+            "slide_images_photo_saved",
+            current=len(stored_paths),
+            max_count=slide_count,
         )
-        file_path = await build_presentation_file(
-            topic=topic,
-            template_types=template_types,
-            slides=slides,
-            font_name=font_name,
-            font_color=font_color,
-            creator_names=creator_names,
-            creator_title=t(lang, "creator_slide_title"),
-        )
-        await add_presentation_history(
-            user_id=message.from_user.id,
-            topic=topic,
-            slide_count=slide_count + extra_slide,
-            template_types=template_types,
-            font_name=font_name,
-            font_color=font_color,
-            language=lang,
-        )
-        restore_token = False
-        await message.answer_document(
-            document=FSInputFile(file_path),
-            caption=t(
-                lang,
-                "ready",
-                slides=slide_count + extra_slide,
-                font=font_name,
-                color=font_color_label,
-                tokens=tokens_left,
-            ),
-            reply_markup=build_main_menu(lang=lang, is_admin=_is_admin(message)),
-        )
-    except Exception as e:
-        logger.error("Failed to build presentation: %s", e)
-        await message.answer(
-            t(lang, "build_error", error=escape(str(e))),
-            reply_markup=build_main_menu(lang=lang, is_admin=_is_admin(message)),
-        )
-    finally:
-        if restore_token:
-            await add_user_tokens(message.from_user.id, 1, settings.default_tokens)
-        if file_path is not None:
-            shutil.rmtree(file_path.parent, ignore_errors=True)
-        await state.clear()
+    )
+
+    if len(stored_paths) >= slide_count:
+        await message.answer(t(lang, "slide_images_limit_reached", max_count=slide_count))
+        await _finalize_presentation_generation(message, state, lang)

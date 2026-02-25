@@ -89,6 +89,62 @@ def _estimate_body_font_size(slide: SlideContent) -> int:
     return 22
 
 
+def _fit_inside(width: int, height: int, max_width: int, max_height: int) -> tuple[int, int]:
+    if width <= 0 or height <= 0 or max_width <= 0 or max_height <= 0:
+        return max(1, max_width), max(1, max_height)
+    ratio = min(max_width / float(width), max_height / float(height))
+    return max(1, int(width * ratio)), max(1, int(height * ratio))
+
+
+def _adjust_zones_for_user_image(
+    body_zone: tuple[float, float, float, float],
+) -> tuple[tuple[float, float, float, float], tuple[float, float, float, float]]:
+    left, top, width, height = body_zone
+    if width >= 0.56:
+        image_width = min(0.30, max(0.20, width * 0.34))
+        gutter = 0.02
+        text_width = max(0.24, width - image_width - gutter)
+        image_left = left + text_width + gutter
+        return (left, top, text_width, height), (image_left, top, image_width, height)
+
+    text_height = max(0.24, height * 0.62)
+    image_top = top + text_height + 0.02
+    image_height = max(0.16, height - text_height - 0.02)
+    image_left = left + (width * 0.05)
+    image_width = width * 0.90
+    return (left, top, width, text_height), (image_left, image_top, image_width, image_height)
+
+
+def _add_user_image(
+    slide,
+    image_path: Path,
+    image_zone: tuple[float, float, float, float],
+    slide_width: int,
+    slide_height: int,
+) -> None:
+    if not image_path.exists():
+        return
+    zone_left, zone_top, zone_width, zone_height = _ratio_to_emu(image_zone, slide_width, slide_height)
+    if zone_width <= 0 or zone_height <= 0:
+        return
+    try:
+        with Image.open(image_path) as img:
+            image_width, image_height = img.size
+    except Exception:
+        return
+
+    fit_width, fit_height = _fit_inside(image_width, image_height, zone_width, zone_height)
+    left = zone_left + max(0, (zone_width - fit_width) // 2)
+    top = zone_top + max(0, (zone_height - fit_height) // 2)
+    slide.shapes.add_picture(
+        str(image_path),
+        left=left,
+        top=top,
+        width=fit_width,
+        height=fit_height,
+    )
+
+
 def _ratio_to_emu(
     box: tuple[float, float, float, float],
     slide_width: int,
@@ -274,6 +330,7 @@ def _build_presentation_sync(
     font_color: str,
     creator_names: str | None = None,
     creator_title: str = "Presentation creators",
+    user_image_paths: list[str] | None = None,
 ) -> Path:
     presentation = Presentation()
     blank_layout = presentation.slide_layouts[6]
@@ -282,6 +339,11 @@ def _build_presentation_sync(
     temp_images: list[Path] = []
     pdf_pages_cache: dict[str, list[Path]] = {}
     zones_cache: dict[str, tuple[tuple[float, float, float, float], tuple[float, float, float, float]]] = {}
+    prepared_user_images: list[Path] = []
+    for image_path in user_image_paths or []:
+        candidate = Path(image_path)
+        if candidate.exists():
+            prepared_user_images.append(candidate)
 
     for index, slide_content in enumerate(slides):
         template_type = template_types[index] if index < len(template_types) else (template_types[0] if template_types else 1)
@@ -332,6 +394,12 @@ def _build_presentation_sync(
         else:
             title_zone, body_zone = TITLE_ZONE, BODY_ZONE
 
+        user_image_path = prepared_user_images[index] if index < len(prepared_user_images) else None
+        image_zone: tuple[float, float, float, float] | None = None
+        body_zone_for_text = body_zone
+        if user_image_path is not None:
+            body_zone_for_text, image_zone = _adjust_zones_for_user_image(body_zone)
+
         title_left, title_top, title_width, title_height = _ratio_to_emu(
             title_zone,
             presentation.slide_width,
@@ -360,7 +428,7 @@ def _build_presentation_sync(
         title_paragraph.alignment = PP_ALIGN.CENTER
 
         body_left, body_top, body_width, body_height = _ratio_to_emu(
-            body_zone,
+            body_zone_for_text,
             presentation.slide_width,
             presentation.slide_height,
         )
@@ -389,6 +457,15 @@ def _build_presentation_sync(
             paragraph.font.color.rgb = color
             paragraph.alignment = PP_ALIGN.LEFT
             paragraph.space_after = Pt(8)
+
+        if user_image_path is not None and image_zone is not None:
+            _add_user_image(
+                slide=slide,
+                image_path=user_image_path,
+                image_zone=image_zone,
+                slide_width=presentation.slide_width,
+                slide_height=presentation.slide_height,
+            )
 
         nav_top = int(presentation.slide_height * 0.92)
         nav_width = int(presentation.slide_width * 0.11)
@@ -514,6 +591,7 @@ async def build_presentation_file(
     font_color: str,
     creator_names: str | None = None,
     creator_title: str = "Presentation creators",
+    user_image_paths: list[str] | None = None,
 ) -> Path:
     return await asyncio.to_thread(
         _build_presentation_sync,
@@ -524,5 +602,6 @@ async def build_presentation_file(
         font_color,
         creator_names,
         creator_title,
+        user_image_paths,
     )
 
