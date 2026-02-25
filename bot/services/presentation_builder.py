@@ -272,35 +272,6 @@ def _add_background(slide, slide_width: int, slide_height: int, index: int) -> t
     return header_color, accent_color
 
 
-def _add_nav_button(slide, text: str, left: int, top: int, width: int, height: int, fill: RGBColor):
-    button = slide.shapes.add_shape(
-        MSO_AUTO_SHAPE_TYPE.ROUNDED_RECTANGLE,
-        left=left,
-        top=top,
-        width=width,
-        height=height,
-    )
-    button.fill.solid()
-    button.fill.fore_color.rgb = fill
-    button.line.fill.background()
-
-    frame = button.text_frame
-    frame.clear()
-    frame.margin_left = 0
-    frame.margin_right = 0
-    frame.margin_top = 0
-    frame.margin_bottom = 0
-    frame.vertical_anchor = MSO_ANCHOR.MIDDLE
-
-    paragraph = frame.paragraphs[0]
-    paragraph.text = text
-    paragraph.alignment = PP_ALIGN.CENTER
-    paragraph.font.bold = True
-    paragraph.font.size = Pt(12)
-    paragraph.font.color.rgb = RGBColor(255, 255, 255)
-    return button
-
-
 def _render_pdf_pages_to_png(pdf_path: Path) -> list[Path]:
     if fitz is None:
         raise RuntimeError("Для PDF-шаблона нужен пакет PyMuPDF (pip install pymupdf).")
@@ -335,7 +306,6 @@ def _build_presentation_sync(
     presentation = Presentation()
     blank_layout = presentation.slide_layouts[6]
     color = _parse_hex_color(font_color)
-    nav_buttons: list[tuple[object, object]] = []
     temp_images: list[Path] = []
     pdf_pages_cache: dict[str, list[Path]] = {}
     zones_cache: dict[str, tuple[tuple[float, float, float, float], tuple[float, float, float, float]]] = {}
@@ -348,7 +318,6 @@ def _build_presentation_sync(
     for index, slide_content in enumerate(slides):
         template_type = template_types[index] if index < len(template_types) else (template_types[0] if template_types else 1)
         slide = presentation.slides.add_slide(blank_layout)
-        accent_color = RGBColor(47, 75, 124)
 
         pdf_template_path = resolve_pdf_template_asset(template_type)
         static_image_asset = resolve_template_asset(template_type)
@@ -381,7 +350,7 @@ def _build_presentation_sync(
             )
             zone_key = str(static_image_asset.resolve())
         else:
-            _, accent_color = _add_background(slide, presentation.slide_width, presentation.slide_height, index)
+            _add_background(slide, presentation.slide_width, presentation.slide_height, index)
             zone_key = ""
 
         if zone_key:
@@ -467,33 +436,10 @@ def _build_presentation_sync(
                 slide_height=presentation.slide_height,
             )
 
-        nav_top = int(presentation.slide_height * 0.92)
-        nav_width = int(presentation.slide_width * 0.11)
-        nav_height = int(presentation.slide_height * 0.055)
-        prev_button = _add_nav_button(
-            slide,
-            text="Back",
-            left=int(presentation.slide_width * 0.07),
-            top=nav_top,
-            width=nav_width,
-            height=nav_height,
-            fill=accent_color,
-        )
-        next_button = _add_nav_button(
-            slide,
-            text="Next",
-            left=int(presentation.slide_width * 0.82),
-            top=nav_top,
-            width=nav_width,
-            height=nav_height,
-            fill=accent_color,
-        )
-        nav_buttons.append((prev_button, next_button))
-
     if creator_names:
         creator_index = len(slides)
         final_slide = presentation.slides.add_slide(blank_layout)
-        _, accent_color = _add_background(
+        _add_background(
             final_slide,
             presentation.slide_width,
             presentation.slide_height,
@@ -536,40 +482,6 @@ def _build_presentation_sync(
             paragraph.font.size = Pt(26)
             paragraph.font.color.rgb = color
             paragraph.alignment = PP_ALIGN.CENTER
-
-        nav_top = int(presentation.slide_height * 0.92)
-        nav_width = int(presentation.slide_width * 0.11)
-        nav_height = int(presentation.slide_height * 0.055)
-        prev_button = _add_nav_button(
-            final_slide,
-            text="Back",
-            left=int(presentation.slide_width * 0.07),
-            top=nav_top,
-            width=nav_width,
-            height=nav_height,
-            fill=accent_color,
-        )
-        next_button = _add_nav_button(
-            final_slide,
-            text="Next",
-            left=int(presentation.slide_width * 0.82),
-            top=nav_top,
-            width=nav_width,
-            height=nav_height,
-            fill=accent_color,
-        )
-        nav_buttons.append((prev_button, next_button))
-
-    all_slides = list(presentation.slides)
-    for idx, (prev_button, next_button) in enumerate(nav_buttons):
-        try:
-            if idx > 0:
-                prev_button.click_action.target_slide = all_slides[idx - 1]
-            if idx + 1 < len(all_slides):
-                next_button.click_action.target_slide = all_slides[idx + 1]
-        except Exception:
-            # Keep visual buttons even when hyperlink assignment is unsupported.
-            pass
 
     out_dir = Path(tempfile.mkdtemp(prefix="tg_presentation_"))
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
