@@ -28,15 +28,21 @@ from bot.db import (
     add_user_tokens,
     get_premium_users,
     get_all_users,
+    get_all_user_profiles,
+    get_broadcast_user_ids,
     get_global_template_combos,
     get_recent_user_events,
     get_recent_template_submissions,
+    get_user_ban,
     is_premium_user,
     get_user_data,
+    get_user_profile,
     get_user_presentation_history,
     get_user_template_combos,
     remove_premium_user,
+    remove_user_ban,
     remove_user_tokens,
+    set_user_ban,
     set_premium_user,
     set_user_language,
     try_spend_user_token,
@@ -410,6 +416,11 @@ class AdminForm(StatesGroup):
     remove_target_user_id = State()
     remove_token_amount = State()
     check_user_id = State()
+    ban_target_user_id = State()
+    ban_reason = State()
+    unban_target_user_id = State()
+    broadcast_text = State()
+    profile_user_id = State()
 
 
 class CustomTemplateForm(StatesGroup):
@@ -463,6 +474,21 @@ def _extract_command_user_id(message: Message) -> int | None:
     if not candidate.isdigit():
         return None
     return int(candidate)
+
+
+def _extract_command_user_id_and_tail(message: Message) -> tuple[int | None, str]:
+    text = (message.text or "").strip()
+    parts = text.split(maxsplit=2)
+    if len(parts) < 2 or not parts[1].strip().isdigit():
+        return None, ""
+    tail = parts[2].strip() if len(parts) >= 3 else ""
+    return int(parts[1].strip()), tail
+
+
+def _bool_label(value: bool | None) -> str:
+    if value is None:
+        return "unknown"
+    return "yes" if value else "no"
 
 
 async def _lang_and_tokens(message: Message) -> tuple[str, int]:
@@ -882,6 +908,208 @@ async def admin_check_tokens(message: Message, state: FSMContext) -> None:
     )
 
 
+async def _send_user_profile_card(message: Message, lang: str, user_id: int) -> None:
+    profile = await get_user_profile(user_id)
+    if profile is None:
+        await message.answer(t(lang, "user_profile_not_found", user_id=user_id), reply_markup=build_admin_panel_menu(lang))
+        return
+
+    tokens, app_lang = await get_user_data(user_id, settings.default_tokens)
+    ban = await get_user_ban(user_id)
+    username = f"@{profile.username}" if profile.username else "-"
+    raw_user = escape(profile.raw_user_json[:1400] or "")
+    raw_chat = escape(profile.raw_chat_json[:1400] or "")
+    ban_reason = escape(ban.reason) if ban is not None and ban.reason else "-"
+
+    lines = [
+        f"👤 <b>{t(lang, 'user_profile_title', user_id=user_id)}</b>",
+        f"<b>id</b>: <code>{profile.telegram_user_id}</code>",
+        f"<b>chat_id</b>: <code>{profile.chat_id}</code>",
+        f"<b>username</b>: {escape(username)}",
+        f"<b>first_name</b>: {escape(profile.first_name or '-')}",
+        f"<b>last_name</b>: {escape(profile.last_name or '-')}",
+        f"<b>full_name</b>: {escape(profile.full_name or '-')}",
+        f"<b>tg_language_code</b>: {escape(profile.language_code or '-')}",
+        f"<b>app_language</b>: {escape(app_lang)}",
+        f"<b>tokens</b>: {tokens}",
+        f"<b>is_bot</b>: {_bool_label(profile.is_bot)}",
+        f"<b>is_premium</b>: {_bool_label(profile.is_premium)}",
+        f"<b>added_to_attachment_menu</b>: {_bool_label(profile.added_to_attachment_menu)}",
+        f"<b>can_join_groups</b>: {_bool_label(profile.can_join_groups)}",
+        f"<b>can_read_all_group_messages</b>: {_bool_label(profile.can_read_all_group_messages)}",
+        f"<b>supports_inline_queries</b>: {_bool_label(profile.supports_inline_queries)}",
+        f"<b>can_connect_to_business</b>: {_bool_label(profile.can_connect_to_business)}",
+        f"<b>has_main_web_app</b>: {_bool_label(profile.has_main_web_app)}",
+        f"<b>last_message_type</b>: {escape(profile.last_message_type)}",
+        f"<b>last_message_text</b>: {escape(profile.last_message_text)}",
+        f"<b>last_state</b>: {escape(profile.last_state_name or '-')}",
+        f"<b>first_seen</b>: {profile.first_seen_at.strftime('%Y-%m-%d %H:%M:%S UTC')}",
+        f"<b>last_seen</b>: {profile.last_seen_at.strftime('%Y-%m-%d %H:%M:%S UTC')}",
+        f"<b>banned</b>: {'yes' if ban is not None else 'no'}",
+        f"<b>ban_reason</b>: {ban_reason}",
+        f"<b>raw_user_json (first 1400 chars)</b>:\n<code>{raw_user}</code>",
+        f"<b>raw_chat_json (first 1400 chars)</b>:\n<code>{raw_chat}</code>",
+    ]
+    await _send_chunked_html(message, lines)
+    await message.answer(t(lang, "admin_panel"), reply_markup=build_admin_panel_menu(lang))
+
+
+async def _broadcast_text(message: Message, text_value: str, lang: str) -> None:
+    await message.answer(t(lang, "broadcast_started"))
+    user_ids = await get_broadcast_user_ids(limit=10000)
+    sent = 0
+    failed = 0
+    for index, user_id in enumerate(user_ids, start=1):
+        try:
+            await message.bot.send_message(chat_id=user_id, text=text_value)
+            sent += 1
+        except Exception:
+            failed += 1
+        if index % 40 == 0:
+            await asyncio.sleep(0)
+    await message.answer(
+        t(lang, "broadcast_finished", sent=sent, failed=failed, total=len(user_ids)),
+        reply_markup=build_admin_panel_menu(lang),
+    )
+
+
+@router.message(Command("user_profile"))
+@router.message(F.text.func(lambda value: is_action_text(value, "user_profile")))
+async def admin_user_profile_start(message: Message, state: FSMContext) -> None:
+    lang, _ = await _lang_and_tokens(message)
+    if not _is_admin(message):
+        await message.answer(t(lang, "access_denied"))
+        return
+    target_user_id = _extract_command_user_id(message)
+    if target_user_id is not None:
+        await state.clear()
+        await _send_user_profile_card(message, lang, target_user_id)
+        return
+    await state.set_state(AdminForm.profile_user_id)
+    await message.answer(t(lang, "ask_profile_user_id"))
+
+
+@router.message(AdminForm.profile_user_id)
+async def admin_user_profile_by_state(message: Message, state: FSMContext) -> None:
+    lang, _ = await _lang_and_tokens(message)
+    text = (message.text or "").strip()
+    if not text.isdigit():
+        await message.answer(t(lang, "id_must_number"))
+        return
+    await state.clear()
+    await _send_user_profile_card(message, lang, int(text))
+
+
+@router.message(Command("ban"))
+@router.message(F.text.func(lambda value: is_action_text(value, "ban_user")))
+async def admin_ban_start(message: Message, state: FSMContext) -> None:
+    lang, _ = await _lang_and_tokens(message)
+    if not _is_admin(message):
+        await message.answer(t(lang, "access_denied"))
+        return
+    target_user_id, reason_tail = _extract_command_user_id_and_tail(message)
+    if target_user_id is not None:
+        reason = reason_tail or t(lang, "ban_default_reason")
+        created = await set_user_ban(target_user_id, reason, message.from_user.id if message.from_user else 0)
+        key = "user_banned" if created else "user_ban_updated"
+        await state.clear()
+        await message.answer(t(lang, key, user_id=target_user_id), reply_markup=build_admin_panel_menu(lang))
+        return
+    await state.set_state(AdminForm.ban_target_user_id)
+    await message.answer(t(lang, "ask_ban_user_id"))
+
+
+@router.message(AdminForm.ban_target_user_id)
+async def admin_ban_target(message: Message, state: FSMContext) -> None:
+    lang, _ = await _lang_and_tokens(message)
+    text = (message.text or "").strip()
+    if not text.isdigit():
+        await message.answer(t(lang, "id_must_number"))
+        return
+    await state.update_data(ban_target_user_id=int(text))
+    await state.set_state(AdminForm.ban_reason)
+    await message.answer(t(lang, "ask_ban_reason"))
+
+
+@router.message(AdminForm.ban_reason)
+async def admin_ban_reason(message: Message, state: FSMContext) -> None:
+    lang, _ = await _lang_and_tokens(message)
+    data = await state.get_data()
+    raw_target = data.get("ban_target_user_id")
+    if raw_target is None:
+        await state.clear()
+        await message.answer(t(lang, "action_expired_retry"), reply_markup=build_admin_panel_menu(lang))
+        return
+    reason = (message.text or "").strip()
+    if not reason or reason == "-":
+        reason = t(lang, "ban_default_reason")
+    target_user_id = int(raw_target)
+    created = await set_user_ban(target_user_id, reason, message.from_user.id if message.from_user else 0)
+    key = "user_banned" if created else "user_ban_updated"
+    await state.clear()
+    await message.answer(t(lang, key, user_id=target_user_id), reply_markup=build_admin_panel_menu(lang))
+
+
+@router.message(Command("unban"))
+@router.message(F.text.func(lambda value: is_action_text(value, "unban_user")))
+async def admin_unban_start(message: Message, state: FSMContext) -> None:
+    lang, _ = await _lang_and_tokens(message)
+    if not _is_admin(message):
+        await message.answer(t(lang, "access_denied"))
+        return
+    target_user_id = _extract_command_user_id(message)
+    if target_user_id is not None:
+        removed = await remove_user_ban(target_user_id)
+        key = "user_unbanned" if removed else "user_not_banned"
+        await state.clear()
+        await message.answer(t(lang, key, user_id=target_user_id), reply_markup=build_admin_panel_menu(lang))
+        return
+    await state.set_state(AdminForm.unban_target_user_id)
+    await message.answer(t(lang, "ask_unban_user_id"))
+
+
+@router.message(AdminForm.unban_target_user_id)
+async def admin_unban_target(message: Message, state: FSMContext) -> None:
+    lang, _ = await _lang_and_tokens(message)
+    text = (message.text or "").strip()
+    if not text.isdigit():
+        await message.answer(t(lang, "id_must_number"))
+        return
+    target_user_id = int(text)
+    removed = await remove_user_ban(target_user_id)
+    key = "user_unbanned" if removed else "user_not_banned"
+    await state.clear()
+    await message.answer(t(lang, key, user_id=target_user_id), reply_markup=build_admin_panel_menu(lang))
+
+
+@router.message(Command("broadcast"))
+@router.message(F.text.func(lambda value: is_action_text(value, "broadcast_all")))
+async def admin_broadcast_start(message: Message, state: FSMContext) -> None:
+    lang, _ = await _lang_and_tokens(message)
+    if not _is_admin(message):
+        await message.answer(t(lang, "access_denied"))
+        return
+    text = (message.text or "").strip()
+    parts = text.split(maxsplit=1)
+    if len(parts) == 2 and parts[0].startswith("/"):
+        await state.clear()
+        await _broadcast_text(message, parts[1], lang)
+        return
+    await state.set_state(AdminForm.broadcast_text)
+    await message.answer(t(lang, "broadcast_prompt"))
+
+
+@router.message(AdminForm.broadcast_text)
+async def admin_broadcast_send(message: Message, state: FSMContext) -> None:
+    lang, _ = await _lang_and_tokens(message)
+    text_value = (message.text or "").strip()
+    if not text_value:
+        await message.answer(t(lang, "source_invalid_input"))
+        return
+    await state.clear()
+    await _broadcast_text(message, text_value, lang)
+
+
 @router.message(Command("all_users"))
 @router.message(F.text.func(lambda value: is_action_text(value, "all_users")))
 async def admin_all_users(message: Message) -> None:
@@ -890,23 +1118,32 @@ async def admin_all_users(message: Message) -> None:
         await message.answer(t(lang, "access_denied"))
         return
 
-    users = await get_all_users()
-    if not users:
+    profiles = await get_all_user_profiles(limit=1000)
+    if not profiles:
         await message.answer(t(lang, "all_users_empty"), reply_markup=build_admin_panel_menu(lang))
         return
 
-    labels = {
-        "ru": ("Пользователь", "Токены", "Язык"),
-        "en": ("User", "Tokens", "Language"),
-        "uz": ("Foydalanuvchi", "Token", "Til"),
-    }
-    user_label, token_label, lang_label = labels.get(lang, labels["ru"])
-    lines = [f"👥 <b>{t(lang, 'all_users_title', count=len(users))}</b>"]
-    for user in users:
+    balances = await get_all_users()
+    balance_map = {row.telegram_user_id: row for row in balances}
+
+    lines = [f"👥 <b>{t(lang, 'all_users_profiles_title', count=len(profiles))}</b>"]
+    for user in profiles:
+        balance = balance_map.get(user.telegram_user_id)
+        app_lang = balance.language if balance is not None else "-"
+        tokens = balance.tokens if balance is not None else 0
+        username = f"@{user.username}" if user.username else "-"
+        seen = user.last_seen_at.strftime("%Y-%m-%d %H:%M UTC")
         lines.append(
-            f"<b>{user_label}</b>: <code>{user.telegram_user_id}</code> | "
-            f"<b>{token_label}</b>: {user.tokens} | "
-            f"<b>{lang_label}</b>: {escape(user.language)}"
+            f"<b>ID</b>: <code>{user.telegram_user_id}</code> | chat=<code>{user.chat_id}</code>\n"
+            f"<b>username</b>: {escape(username)} | <b>full_name</b>: {escape(user.full_name or '-')}\n"
+            f"<b>first_name</b>: {escape(user.first_name or '-')} | <b>last_name</b>: {escape(user.last_name or '-')}\n"
+            f"<b>tg_lang</b>: {escape(user.language_code or '-')} | <b>app_lang</b>: {escape(app_lang)} | <b>tokens</b>: {tokens}\n"
+            f"<b>is_premium</b>: {_bool_label(user.is_premium)} | <b>is_bot</b>: {_bool_label(user.is_bot)}\n"
+            f"<b>attach_menu</b>: {_bool_label(user.added_to_attachment_menu)} | <b>inline</b>: {_bool_label(user.supports_inline_queries)}\n"
+            f"<b>can_join_groups</b>: {_bool_label(user.can_join_groups)} | <b>read_all_groups</b>: {_bool_label(user.can_read_all_group_messages)}\n"
+            f"<b>business</b>: {_bool_label(user.can_connect_to_business)} | <b>main_web_app</b>: {_bool_label(user.has_main_web_app)}\n"
+            f"<b>last_message_type</b>: {escape(user.last_message_type)} | <b>last_state</b>: {escape(user.last_state_name or '-')}\n"
+            f"<b>last_seen</b>: {seen}"
         )
     await _send_chunked_html(message, lines)
     await message.answer(t(lang, "admin_panel"), reply_markup=build_admin_panel_menu(lang))

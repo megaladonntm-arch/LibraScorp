@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from sqlalchemy import BigInteger, DateTime, Integer, String, select, text
+from sqlalchemy import BigInteger, Boolean, DateTime, Integer, String, Text, select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
@@ -48,6 +48,44 @@ class UserEventLog(Base):
     message_type: Mapped[str] = mapped_column(String(32), nullable=False, default="text")
     message_text: Mapped[str] = mapped_column(String(1000), nullable=False, default="")
     state_name: Mapped[str] = mapped_column(String(255), nullable=False, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class UserProfile(Base):
+    __tablename__ = "user_profiles"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    telegram_user_id: Mapped[int] = mapped_column(BigInteger, unique=True, index=True, nullable=False)
+    chat_id: Mapped[int] = mapped_column(BigInteger, index=True, nullable=False, default=0)
+    username: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    first_name: Mapped[str] = mapped_column(String(128), nullable=False, default="")
+    last_name: Mapped[str] = mapped_column(String(128), nullable=False, default="")
+    full_name: Mapped[str] = mapped_column(String(255), nullable=False, default="")
+    language_code: Mapped[str] = mapped_column(String(12), nullable=False, default="")
+    is_bot: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    is_premium: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    added_to_attachment_menu: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    can_join_groups: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    can_read_all_group_messages: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    supports_inline_queries: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    can_connect_to_business: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    has_main_web_app: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    last_message_type: Mapped[str] = mapped_column(String(32), nullable=False, default="text")
+    last_message_text: Mapped[str] = mapped_column(String(1000), nullable=False, default="")
+    last_state_name: Mapped[str] = mapped_column(String(255), nullable=False, default="")
+    raw_user_json: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    raw_chat_json: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    first_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class UserBan(Base):
+    __tablename__ = "user_bans"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    telegram_user_id: Mapped[int] = mapped_column(BigInteger, unique=True, index=True, nullable=False)
+    reason: Mapped[str] = mapped_column(String(500), nullable=False, default="")
+    banned_by_user_id: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
@@ -243,6 +281,85 @@ async def log_user_event(
         await session.commit()
 
 
+async def upsert_user_profile(
+    user_id: int,
+    chat_id: int,
+    username: str,
+    first_name: str,
+    last_name: str,
+    full_name: str,
+    language_code: str,
+    is_bot: bool,
+    is_premium: bool | None,
+    added_to_attachment_menu: bool | None,
+    can_join_groups: bool | None,
+    can_read_all_group_messages: bool | None,
+    supports_inline_queries: bool | None,
+    can_connect_to_business: bool | None,
+    has_main_web_app: bool | None,
+    last_message_type: str,
+    last_message_text: str,
+    state_name: str,
+    raw_user_json: str,
+    raw_chat_json: str,
+) -> None:
+    now = datetime.now(timezone.utc)
+    async with SessionLocal() as session:
+        result = await session.execute(
+            select(UserProfile).where(UserProfile.telegram_user_id == user_id)
+        )
+        row = result.scalar_one_or_none()
+        if row is None:
+            row = UserProfile(
+                telegram_user_id=user_id,
+                chat_id=chat_id,
+                username=username[:64],
+                first_name=first_name[:128],
+                last_name=last_name[:128],
+                full_name=full_name[:255],
+                language_code=language_code[:12],
+                is_bot=is_bot,
+                is_premium=is_premium,
+                added_to_attachment_menu=added_to_attachment_menu,
+                can_join_groups=can_join_groups,
+                can_read_all_group_messages=can_read_all_group_messages,
+                supports_inline_queries=supports_inline_queries,
+                can_connect_to_business=can_connect_to_business,
+                has_main_web_app=has_main_web_app,
+                last_message_type=last_message_type[:32],
+                last_message_text=last_message_text[:1000],
+                last_state_name=state_name[:255],
+                raw_user_json=raw_user_json[:10000],
+                raw_chat_json=raw_chat_json[:10000],
+                first_seen_at=now,
+                last_seen_at=now,
+            )
+            session.add(row)
+        else:
+            row.chat_id = chat_id
+            row.username = username[:64]
+            row.first_name = first_name[:128]
+            row.last_name = last_name[:128]
+            row.full_name = full_name[:255]
+            row.language_code = language_code[:12]
+            row.is_bot = is_bot
+            row.is_premium = is_premium
+            row.added_to_attachment_menu = added_to_attachment_menu
+            row.can_join_groups = can_join_groups
+            row.can_read_all_group_messages = can_read_all_group_messages
+            row.supports_inline_queries = supports_inline_queries
+            row.can_connect_to_business = can_connect_to_business
+            row.has_main_web_app = has_main_web_app
+            row.last_message_type = last_message_type[:32]
+            row.last_message_text = last_message_text[:1000]
+            row.last_state_name = state_name[:255]
+            row.raw_user_json = raw_user_json[:10000]
+            row.raw_chat_json = raw_chat_json[:10000]
+            row.last_seen_at = now
+        await session.flush()
+        await session.commit()
+
+
 async def get_recent_user_events(limit: int = 100) -> list[UserEventLog]:
     effective_limit = max(1, min(limit, 500))
     async with SessionLocal() as session:
@@ -260,6 +377,97 @@ async def get_all_users() -> list[UserBalance]:
             select(UserBalance).order_by(UserBalance.id.asc())
         )
         return list(result.scalars().all())
+
+
+async def get_all_user_profiles(limit: int = 1000) -> list[UserProfile]:
+    effective_limit = max(1, min(limit, 10000))
+    async with SessionLocal() as session:
+        result = await session.execute(
+            select(UserProfile)
+            .order_by(UserProfile.last_seen_at.desc(), UserProfile.id.desc())
+            .limit(effective_limit)
+        )
+        return list(result.scalars().all())
+
+
+async def get_user_profile(user_id: int) -> UserProfile | None:
+    async with SessionLocal() as session:
+        result = await session.execute(
+            select(UserProfile).where(UserProfile.telegram_user_id == user_id)
+        )
+        return result.scalar_one_or_none()
+
+
+async def get_broadcast_user_ids(limit: int = 10000) -> list[int]:
+    effective_limit = max(1, min(limit, 50000))
+    async with SessionLocal() as session:
+        result = await session.execute(
+            select(UserProfile.telegram_user_id)
+            .order_by(UserProfile.last_seen_at.desc(), UserProfile.id.desc())
+            .limit(effective_limit)
+        )
+        ids = [int(row[0]) for row in result.all()]
+        if ids:
+            return ids
+        fallback = await session.execute(
+            select(UserBalance.telegram_user_id).order_by(UserBalance.id.asc()).limit(effective_limit)
+        )
+        return [int(row[0]) for row in fallback.all()]
+
+
+async def set_user_ban(user_id: int, reason: str, banned_by_user_id: int) -> bool:
+    async with SessionLocal() as session:
+        result = await session.execute(
+            select(UserBan).where(UserBan.telegram_user_id == user_id)
+        )
+        row = result.scalar_one_or_none()
+        if row is not None:
+            row.reason = reason[:500]
+            row.banned_by_user_id = banned_by_user_id
+            row.created_at = datetime.now(timezone.utc)
+            await session.flush()
+            await session.commit()
+            return False
+        row = UserBan(
+            telegram_user_id=user_id,
+            reason=reason[:500],
+            banned_by_user_id=banned_by_user_id,
+            created_at=datetime.now(timezone.utc),
+        )
+        session.add(row)
+        await session.flush()
+        await session.commit()
+        return True
+
+
+async def remove_user_ban(user_id: int) -> bool:
+    async with SessionLocal() as session:
+        result = await session.execute(
+            select(UserBan).where(UserBan.telegram_user_id == user_id)
+        )
+        row = result.scalar_one_or_none()
+        if row is None:
+            return False
+        await session.delete(row)
+        await session.flush()
+        await session.commit()
+        return True
+
+
+async def get_user_ban(user_id: int) -> UserBan | None:
+    async with SessionLocal() as session:
+        result = await session.execute(
+            select(UserBan).where(UserBan.telegram_user_id == user_id)
+        )
+        return result.scalar_one_or_none()
+
+
+async def is_user_banned(user_id: int) -> bool:
+    async with SessionLocal() as session:
+        result = await session.execute(
+            select(UserBan.id).where(UserBan.telegram_user_id == user_id)
+        )
+        return result.scalar_one_or_none() is not None
 
 
 async def get_user_template_combos(user_id: int) -> list[UserTemplateCombo]:
