@@ -99,10 +99,12 @@ SessionLocal = async_sessionmaker(bind=engine, expire_on_commit=False, future=Tr
 async def init_db() -> None:
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
-        columns = (await conn.execute(text("PRAGMA table_info(user_balances)"))).fetchall()
-        names = {str(col[1]) for col in columns}
-        if "language" not in names:
-            await conn.execute(text("ALTER TABLE user_balances ADD COLUMN language VARCHAR(2) NOT NULL DEFAULT 'ru'"))
+        # Backward-compatible migration for old SQLite databases.
+        if conn.dialect.name == "sqlite":
+            columns = (await conn.execute(text("PRAGMA table_info(user_balances)"))).fetchall()
+            names = {str(col[1]) for col in columns}
+            if "language" not in names:
+                await conn.execute(text("ALTER TABLE user_balances ADD COLUMN language VARCHAR(2) NOT NULL DEFAULT 'ru'"))
 
 
 async def _get_or_create_user(session: AsyncSession, user_id: int, default_tokens: int) -> UserBalance:
