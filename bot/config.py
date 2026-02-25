@@ -50,7 +50,15 @@ def _parse_models() -> tuple[str, ...]:
 def _build_database_url() -> str:
     direct_url = os.getenv("DATABASE_URL")
     if direct_url and direct_url.strip():
-        return direct_url.strip()
+        normalized_url = direct_url.strip()
+        # Railway/Postgres providers often expose sync URLs like:
+        # postgres://... or postgresql://...
+        # This app uses SQLAlchemy async engine, so force asyncpg driver.
+        if normalized_url.startswith("postgres://"):
+            return "postgresql+asyncpg://" + normalized_url[len("postgres://") :]
+        if normalized_url.startswith("postgresql://") and "+asyncpg" not in normalized_url:
+            return "postgresql+asyncpg://" + normalized_url[len("postgresql://") :]
+        return normalized_url
 
     db_path_value = os.getenv("DB_PATH", "bot.sqlite3").strip()
     db_path = Path(db_path_value)
