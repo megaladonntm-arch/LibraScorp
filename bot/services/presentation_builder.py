@@ -1,6 +1,7 @@
 ﻿from __future__ import annotations
 
 import asyncio
+import random
 import re
 import tempfile
 from datetime import datetime
@@ -146,23 +147,56 @@ def _add_background_image_cover(
         picture.crop_bottom = crop_each
 
 
+def _pick_image_layout(image_path: Path) -> str:
+    layouts = ("left", "right", "top", "bottom")
+    rng = random.SystemRandom()
+    try:
+        with Image.open(image_path) as img:
+            img_width, img_height = img.size
+    except Exception:
+        return rng.choice(layouts)
+
+    if img_width <= 0 or img_height <= 0:
+        return rng.choice(layouts)
+
+    # Keep random feel, but bias by image aspect for better visual balance.
+    if img_width >= img_height:
+        weighted = ("top", "bottom", "left", "right", "top", "bottom")
+    else:
+        weighted = ("left", "right", "top", "bottom", "left", "right")
+    return rng.choice(weighted)
+
+
 def _adjust_zones_for_user_image(
     body_zone: tuple[float, float, float, float],
+    image_path: Path,
 ) -> tuple[tuple[float, float, float, float], tuple[float, float, float, float]]:
     left, top, width, height = body_zone
-    if width >= 0.56:
-        image_width = min(0.30, max(0.20, width * 0.34))
-        gutter = 0.02
-        text_width = max(0.24, width - image_width - gutter)
-        image_left = left + text_width + gutter
-        return (left, top, text_width, height), (image_left, top, image_width, height)
+    layout = _pick_image_layout(image_path)
+    gutter = 0.02
 
-    text_height = max(0.24, height * 0.62)
-    image_top = top + text_height + 0.02
-    image_height = max(0.16, height - text_height - 0.02)
-    image_left = left + (width * 0.05)
-    image_width = width * 0.90
-    return (left, top, width, text_height), (image_left, image_top, image_width, image_height)
+    if layout in {"left", "right"}:
+        image_width = min(0.34, max(0.22, width * 0.35))
+        text_width = max(0.24, width - image_width - gutter)
+        if layout == "left":
+            image_left = left
+            text_left = left + image_width + gutter
+        else:
+            text_left = left
+            image_left = left + text_width + gutter
+        return (text_left, top, text_width, height), (image_left, top, image_width, height)
+
+    image_height = min(0.30, max(0.18, height * 0.34))
+    text_height = max(0.22, height - image_height - gutter)
+    image_width = width * 0.92
+    image_left = left + (width - image_width) / 2.0
+    if layout == "top":
+        image_top = top
+        text_top = top + image_height + gutter
+    else:
+        text_top = top
+        image_top = top + text_height + gutter
+    return (left, text_top, width, text_height), (image_left, image_top, image_width, image_height)
 
 
 def _add_user_image(
@@ -415,7 +449,7 @@ def _build_presentation_sync(
         image_zone: tuple[float, float, float, float] | None = None
         body_zone_for_text = body_zone
         if user_image_path is not None:
-            body_zone_for_text, image_zone = _adjust_zones_for_user_image(body_zone)
+            body_zone_for_text, image_zone = _adjust_zones_for_user_image(body_zone, user_image_path)
 
         title_left, title_top, title_width, title_height = _ratio_to_emu(
             title_zone,
