@@ -37,12 +37,57 @@ SLIDE_MODE_RULES = {
     "risks": "Highlight risks, constraints, failure points, and mitigation actions.",
     "conclusion": "Summarize key takeaways, strategic priorities, and next steps.",
 }
+MAX_TITLE_CHARS = 72
+MAX_BULLET_CHARS = 170
+MAX_BULLETS_PER_SLIDE = 3
 
 
 @dataclass
 class SlideContent:
     title: str
     bullets: list[str]
+
+
+def _truncate_neatly(value: str, limit: int) -> str:
+    cleaned = re.sub(r"\s+", " ", value).strip()
+    if len(cleaned) <= limit:
+        return cleaned
+    shortened = cleaned[:limit].rstrip()
+    if " " in shortened:
+        shortened = shortened.rsplit(" ", 1)[0]
+    return shortened.rstrip(" ,.;:") + "..."
+
+
+def _sanitize_slide_content(slide: SlideContent, lang: str) -> SlideContent:
+    title = _truncate_neatly(slide.title, MAX_TITLE_CHARS) or (
+        "Untitled" if lang == "en" else "Nomsiz" if lang == "uz" else "Без названия"
+    )
+
+    bullets: list[str] = []
+    seen: set[str] = set()
+    for raw in slide.bullets:
+        bullet = re.sub(r"^[\-\*\d\.\)\s]+", "", str(raw).strip())
+        bullet = _truncate_neatly(bullet, MAX_BULLET_CHARS)
+        if len(bullet) < 20:
+            continue
+        key = bullet.casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        bullets.append(bullet)
+        if len(bullets) >= MAX_BULLETS_PER_SLIDE:
+            break
+
+    if not bullets:
+        bullets = (
+            ["Main practical point of this slide."]
+            if lang == "en"
+            else ["Ushbu slaydning asosiy amaliy g'oyasi."]
+            if lang == "uz"
+            else ["Главная практическая мысль этого слайда."]
+        )
+
+    return SlideContent(title=title, bullets=bullets)
 
 
 def list_presentation_types() -> list[int]:
@@ -400,7 +445,7 @@ def _fallback_slides(topic: str, slide_count: int, lang: str, slide_modes: list[
     slides: list[SlideContent] = []
     for i in range(1, slide_count + 1):
         mode = effective_modes[i - 1] if i - 1 < len(effective_modes) else "deep"
-        slides.append(_fallback_mode_slide(topic=topic, index=i, mode=mode, lang=lang))
+        slides.append(_sanitize_slide_content(_fallback_mode_slide(topic=topic, index=i, mode=mode, lang=lang), lang))
     return slides
 
 
@@ -416,13 +461,6 @@ def _normalize_slides(topic: str, slide_count: int, raw: Any, lang: str) -> list
         if not isinstance(item, dict):
             continue
         title = str(item.get("title", "")).strip()
-        if not title:
-            if lang == "en":
-                title = "Untitled"
-            elif lang == "uz":
-                title = "Nomsiz"
-            else:
-                title = "Без названия"
         bullets_raw = item.get("bullets", [])
         if not isinstance(bullets_raw, list):
             bullets_raw = []
@@ -437,7 +475,7 @@ def _normalize_slides(topic: str, slide_count: int, raw: Any, lang: str) -> list
             if key in seen:
                 continue
             seen.add(key)
-            bullets.append(bullet[:500])
+            bullets.append(bullet)
         if not bullets:
             if lang == "en":
                 bullets = ["Main point of this slide."]
@@ -445,7 +483,7 @@ def _normalize_slides(topic: str, slide_count: int, raw: Any, lang: str) -> list
                 bullets = ["Ushbu slaydning asosiy g'oyasi."]
             else:
                 bullets = ["Главная мысль слайда."]
-        slides.append(SlideContent(title=title, bullets=bullets[:4]))
+        slides.append(_sanitize_slide_content(SlideContent(title=title, bullets=bullets), lang))
 
     if len(slides) < slide_count:
         fallback = _fallback_slides(topic, slide_count, lang)
@@ -482,15 +520,16 @@ async def _generate_async(topic: str, slide_count: int, template_type: int, lang
         "Rules:\n"
         "- Exactly the requested slide count.\n"
         "- Follow the per-slide style plan exactly by slide index.\n"
-        "- 3 to 4 HIGH-QUALITY bullets per slide (not too many, but substantive).\n"
-        "- Each bullet: one complete, well-written sentence (120-200 chars). Clear and professional.\n"
+        "- 3 concise but meaningful bullets per slide.\n"
+        "- Each bullet: one complete sentence, approximately 80-170 characters.\n"
         "- Slide 1: engaging title slide with main topic and relevance.\n"
         "- Last slide: clear conclusions and next steps.\n"
         "- Middle slides: key ideas with reasons, specific examples, and practical application.\n"
         "- Write clearly and grammatically - no redundancy, every word counts.\n"
-        "- Explain not only facts, but also context, cause-effect, implications, and actionable recommendations.\n"
+        "- Explain deeply but briefly: simple wording, clear logic, and practical sense.\n"
         "- Include relevant examples, metrics, or practical tips where applicable.\n"
         "- Make the slide visually balanced - not too crowded, easy to read.\n"
+        "- Use elegant, vivid phrasing without being abstract or poetic.\n"
         "- Each slide must have unique, non-repetitive content.\n"
         "- Avoid one-liners, generic statements, and obvious textbook facts.\n"
         "- Prefer concrete, decision-useful information over abstract wording.\n"

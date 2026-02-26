@@ -84,6 +84,7 @@ settings = load_settings()
 ASSETS_DIR = Path(__file__).resolve().parents[2] / "assets_pdf"
 MAX_TELEGRAM_MESSAGE_LEN = 3900
 COMBO_PAGE_SIZE = 6
+MAX_DEFAULT_COMBOS = 72
 MAX_CUSTOM_SLIDE_IMAGE_BYTES = 10 * 1024 * 1024
 MIN_CUSTOM_SLIDE_IMAGE_WIDTH = 400
 MIN_CUSTOM_SLIDE_IMAGE_HEIGHT = 250
@@ -362,12 +363,12 @@ def _default_combos(available: list[int], lang: str) -> list[tuple[str, list[int
     add_combo(local["thirds"], block_a + block_b + block_c)
     add_combo(local["reverse_thirds"], block_c + block_b + block_a)
 
-    for shift in range(1, min(len(available), 12)):
+    for shift in range(1, max(1, len(available))):
         add_combo(local["rotation"].format(shift=shift), available[shift:] + available[:shift])
-        if len(combos) >= 24:
+        if len(combos) >= MAX_DEFAULT_COMBOS:
             break
 
-    return combos[:24]
+    return combos[:MAX_DEFAULT_COMBOS]
 
 
 async def send_template_preview(message: Message, template_num: int, lang: str, color: str = None) -> None:

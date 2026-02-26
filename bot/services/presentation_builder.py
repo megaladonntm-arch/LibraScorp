@@ -81,12 +81,24 @@ def _rgb_from_hex(color_hex: str) -> RGBColor:
 
 def _estimate_body_font_size(slide: SlideContent) -> int:
     max_len = max((len(item) for item in slide.bullets), default=0)
+    total_len = sum(len(item) for item in slide.bullets)
     bullet_count = len(slide.bullets)
-    if bullet_count >= 5 or max_len > 150:
+    if bullet_count >= 4 or max_len > 170 or total_len > 420:
+        return 16
+    if bullet_count >= 3 or max_len > 130 or total_len > 320:
         return 18
-    if bullet_count >= 4 or max_len > 110:
-        return 20
-    return 22
+    return 20
+
+
+def _estimate_title_font_size(title: str) -> int:
+    length = len(title.strip())
+    if length > 90:
+        return 24
+    if length > 70:
+        return 26
+    if length > 50:
+        return 28
+    return 32
 
 
 def _fit_inside(width: int, height: int, max_width: int, max_height: int) -> tuple[int, int]:
@@ -392,9 +404,10 @@ def _build_presentation_sync(
         title_paragraph.text = slide_content.title
         title_paragraph.font.bold = True
         title_paragraph.font.name = font_name
-        title_paragraph.font.size = Pt(34)
+        title_paragraph.font.size = Pt(_estimate_title_font_size(slide_content.title))
         title_paragraph.font.color.rgb = color
         title_paragraph.alignment = PP_ALIGN.CENTER
+        title_paragraph.space_after = Pt(2)
 
         body_left, body_top, body_width, body_height = _ratio_to_emu(
             body_zone_for_text,
@@ -425,7 +438,7 @@ def _build_presentation_sync(
             paragraph.font.size = Pt(body_font_size)
             paragraph.font.color.rgb = color
             paragraph.alignment = PP_ALIGN.LEFT
-            paragraph.space_after = Pt(8)
+            paragraph.space_after = Pt(5)
 
         if user_image_path is not None and image_zone is not None:
             _add_user_image(
