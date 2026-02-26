@@ -83,11 +83,11 @@ def _estimate_body_font_size(slide: SlideContent) -> int:
     max_len = max((len(item) for item in slide.bullets), default=0)
     total_len = sum(len(item) for item in slide.bullets)
     bullet_count = len(slide.bullets)
-    if bullet_count >= 4 or max_len > 170 or total_len > 420:
+    if bullet_count >= 5 or max_len > 210 or total_len > 680:
         return 16
-    if bullet_count >= 3 or max_len > 130 or total_len > 320:
+    if bullet_count >= 4 or max_len > 170 or total_len > 520:
         return 18
-    return 20
+    return 19
 
 
 def _estimate_title_font_size(title: str) -> int:
@@ -96,9 +96,9 @@ def _estimate_title_font_size(title: str) -> int:
         return 24
     if length > 70:
         return 26
-    if length > 50:
-        return 28
-    return 32
+    if length > 52:
+        return 30
+    return 33
 
 
 def _fit_inside(width: int, height: int, max_width: int, max_height: int) -> tuple[int, int]:
@@ -106,6 +106,44 @@ def _fit_inside(width: int, height: int, max_width: int, max_height: int) -> tup
         return max(1, max_width), max(1, max_height)
     ratio = min(max_width / float(width), max_height / float(height))
     return max(1, int(width * ratio)), max(1, int(height * ratio))
+
+
+def _add_background_image_cover(
+    slide,
+    image_path: Path,
+    slide_width: int,
+    slide_height: int,
+) -> None:
+    # Render full-bleed background while preserving original proportions.
+    picture = slide.shapes.add_picture(
+        str(image_path),
+        left=0,
+        top=0,
+        width=slide_width,
+        height=slide_height,
+    )
+    try:
+        with Image.open(image_path) as img:
+            img_width, img_height = img.size
+    except Exception:
+        return
+
+    if img_width <= 0 or img_height <= 0 or slide_width <= 0 or slide_height <= 0:
+        return
+
+    img_ratio = img_width / float(img_height)
+    slide_ratio = slide_width / float(slide_height)
+
+    if img_ratio > slide_ratio:
+        visible = slide_ratio / img_ratio
+        crop_each = max(0.0, min(0.49, (1.0 - visible) / 2.0))
+        picture.crop_left = crop_each
+        picture.crop_right = crop_each
+    elif img_ratio < slide_ratio:
+        visible = img_ratio / slide_ratio
+        crop_each = max(0.0, min(0.49, (1.0 - visible) / 2.0))
+        picture.crop_top = crop_each
+        picture.crop_bottom = crop_each
 
 
 def _adjust_zones_for_user_image(
@@ -344,21 +382,19 @@ def _build_presentation_sync(
             if not pdf_pages:
                 raise RuntimeError(f"PDF шаблон пустой: {pdf_template_path}")
             bg_image = pdf_pages[index % len(pdf_pages)]
-            slide.shapes.add_picture(
-                str(bg_image),
-                left=0,
-                top=0,
-                width=presentation.slide_width,
-                height=presentation.slide_height,
+            _add_background_image_cover(
+                slide=slide,
+                image_path=bg_image,
+                slide_width=presentation.slide_width,
+                slide_height=presentation.slide_height,
             )
             zone_key = str(bg_image.resolve())
         elif static_image_asset is not None:
-            slide.shapes.add_picture(
-                str(static_image_asset),
-                left=0,
-                top=0,
-                width=presentation.slide_width,
-                height=presentation.slide_height,
+            _add_background_image_cover(
+                slide=slide,
+                image_path=static_image_asset,
+                slide_width=presentation.slide_width,
+                slide_height=presentation.slide_height,
             )
             zone_key = str(static_image_asset.resolve())
         else:

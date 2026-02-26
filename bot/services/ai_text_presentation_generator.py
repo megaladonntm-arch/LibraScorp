@@ -37,9 +37,9 @@ SLIDE_MODE_RULES = {
     "risks": "Highlight risks, constraints, failure points, and mitigation actions.",
     "conclusion": "Summarize key takeaways, strategic priorities, and next steps.",
 }
-MAX_TITLE_CHARS = 72
-MAX_BULLET_CHARS = 170
-MAX_BULLETS_PER_SLIDE = 3
+MAX_TITLE_CHARS = 86
+MAX_BULLET_CHARS = 205
+MAX_BULLETS_PER_SLIDE = 4
 
 
 @dataclass
@@ -520,13 +520,13 @@ async def _generate_async(topic: str, slide_count: int, template_type: int, lang
         "Rules:\n"
         "- Exactly the requested slide count.\n"
         "- Follow the per-slide style plan exactly by slide index.\n"
-        "- 3 concise but meaningful bullets per slide.\n"
-        "- Each bullet: one complete sentence, approximately 80-170 characters.\n"
+        "- 3 to 4 meaningful bullets per slide.\n"
+        "- Each bullet: one complete sentence, approximately 90-200 characters.\n"
         "- Slide 1: engaging title slide with main topic and relevance.\n"
         "- Last slide: clear conclusions and next steps.\n"
         "- Middle slides: key ideas with reasons, specific examples, and practical application.\n"
         "- Write clearly and grammatically - no redundancy, every word counts.\n"
-        "- Explain deeply but briefly: simple wording, clear logic, and practical sense.\n"
+        "- Explain deeply but compactly: simple wording, clear logic, and practical value.\n"
         "- Include relevant examples, metrics, or practical tips where applicable.\n"
         "- Make the slide visually balanced - not too crowded, easy to read.\n"
         "- Use elegant, vivid phrasing without being abstract or poetic.\n"
