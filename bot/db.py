@@ -2,7 +2,8 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from sqlalchemy import BigInteger, Boolean, DateTime, Integer, String, Text, select, text
+from sqlalchemy import BigInteger, Boolean, DateTime, Integer, String, Text, select, text, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
@@ -130,7 +131,19 @@ class PremiumUser(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
-engine = create_async_engine(settings.database_url, future=True)
+def _engine_kwargs() -> dict[str, object]:
+    url = settings.database_url.lower()
+    if url.startswith("sqlite"):
+        return {"connect_args": {"timeout": 30}}
+    return {
+        "pool_pre_ping": True,
+        "pool_recycle": 1800,
+        "pool_size": 10,
+        "max_overflow": 20,
+    }
+
+
+engine = create_async_engine(settings.database_url, future=True, **_engine_kwargs())
 SessionLocal = async_sessionmaker(bind=engine, expire_on_commit=False, future=True)
 
 
@@ -151,9 +164,17 @@ async def _get_or_create_user(session: AsyncSession, user_id: int, default_token
     )
     user = result.scalar_one_or_none()
     if user is None:
-        user = UserBalance(telegram_user_id=user_id, tokens=default_tokens, language="ru")
-        session.add(user)
-        await session.flush()
+        candidate = UserBalance(telegram_user_id=user_id, tokens=default_tokens, language="ru")
+        session.add(candidate)
+        try:
+            await session.flush()
+            user = candidate
+        except IntegrityError:
+            await session.rollback()
+            result = await session.execute(
+                select(UserBalance).where(UserBalance.telegram_user_id == user_id)
+            )
+            user = result.scalar_one()
     return user
 
 
@@ -189,14 +210,26 @@ async def set_user_language(user_id: int, language: str, default_tokens: int = 1
 
 async def try_spend_user_token(user_id: int, default_tokens: int = 10) -> tuple[bool, int]:
     async with SessionLocal() as session:
-        user = await _get_or_create_user(session, user_id, default_tokens)
-        if user.tokens <= 0:
+        await _get_or_create_user(session, user_id, default_tokens)
+        result = await session.execute(
+            update(UserBalance)
+            .where(
+                UserBalance.telegram_user_id == user_id,
+                UserBalance.tokens > 0,
+            )
+            .values(tokens=UserBalance.tokens - 1)
+            .returning(UserBalance.tokens)
+        )
+        new_balance = result.scalar_one_or_none()
+        if new_balance is None:
+            current = await session.execute(
+                select(UserBalance.tokens).where(UserBalance.telegram_user_id == user_id)
+            )
+            tokens = int(current.scalar_one_or_none() or 0)
             await session.commit()
-            return False, user.tokens
-        user.tokens -= 1
-        await session.flush()
+            return False, tokens
         await session.commit()
-        return True, user.tokens
+        return True, int(new_balance)
 
 
 async def add_user_tokens(user_id: int, amount: int, default_tokens: int = 10) -> int:

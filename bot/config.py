@@ -22,6 +22,9 @@ class Settings:
     bot_token: str
     admin_id: int
     default_tokens: int
+    log_level: str
+    per_user_rate_limit_window_sec: int
+    per_user_rate_limit_max_messages: int
     openrouter_api_key: str
     openrouter_models: tuple[str, ...]
     openrouter_request_timeout_sec: int
@@ -79,6 +82,9 @@ def load_settings() -> Settings:
         bot_token=bot_token,
         admin_id=_parse_int("ADMIN_ID", 0),
         default_tokens=_parse_int("DEFAULT_TOKENS", 10),
+        log_level=os.getenv("LOG_LEVEL", "INFO").strip().upper() or "INFO",
+        per_user_rate_limit_window_sec=max(1, _parse_int("RATE_LIMIT_WINDOW_SEC", 8)),
+        per_user_rate_limit_max_messages=max(2, _parse_int("RATE_LIMIT_MAX_MESSAGES", 12)),
         openrouter_api_key=os.getenv("OPENROUTER_API_KEY", "").strip(),
         openrouter_models=_parse_models(),
         openrouter_request_timeout_sec=max(10, _parse_int("OPENROUTER_TIMEOUT_SEC", 40)),

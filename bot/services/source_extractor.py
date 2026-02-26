@@ -53,7 +53,6 @@ def _decode_bytes(payload: bytes) -> str:
             continue
     raise ValueError("failed_to_decode")
 
-#extract encodeing and chking file prototype for manager
 def extract_text_from_file(file_path: Path) -> str:
     suffix = file_path.suffix.lower()
     if suffix not in SUPPORTED_TEXT_EXTENSIONS:
