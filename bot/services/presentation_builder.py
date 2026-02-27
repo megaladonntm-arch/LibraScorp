@@ -319,168 +319,6 @@ def _theme_for_index(index: int) -> tuple[RGBColor, RGBColor, RGBColor, RGBColor
     )
 
 
-def _clamp_channel(value: int) -> int:
-    return max(0, min(255, value))
-
-
-def _shift_color(color: RGBColor, delta: int) -> RGBColor:
-    return RGBColor(
-        _clamp_channel(color[0] + delta),
-        _clamp_channel(color[1] + delta),
-        _clamp_channel(color[2] + delta),
-    )
-
-
-def _add_shadowed_card(
-    slide,
-    box: tuple[float, float, float, float],
-    slide_width: int,
-    slide_height: int,
-    fill_color: RGBColor,
-    border_color: RGBColor,
-    shadow_alpha: float = 0.86,
-) -> None:
-    left, top, width, height = _ratio_to_emu(box, slide_width, slide_height)
-    offset_x = int(slide_width * 0.006)
-    offset_y = int(slide_height * 0.010)
-    shadow = slide.shapes.add_shape(
-        MSO_AUTO_SHAPE_TYPE.ROUNDED_RECTANGLE,
-        left=left + offset_x,
-        top=top + offset_y,
-        width=width,
-        height=height,
-    )
-    shadow.fill.solid()
-    shadow.fill.fore_color.rgb = RGBColor(10, 16, 30)
-    shadow.fill.transparency = shadow_alpha
-    shadow.line.fill.background()
-
-    card = slide.shapes.add_shape(
-        MSO_AUTO_SHAPE_TYPE.ROUNDED_RECTANGLE,
-        left=left,
-        top=top,
-        width=width,
-        height=height,
-    )
-    card.fill.solid()
-    card.fill.fore_color.rgb = fill_color
-    card.fill.transparency = 0.14
-    card.line.fill.solid()
-    card.line.fill.fore_color.rgb = border_color
-    card.line.width = Pt(1.4)
-
-
-def _intersects(a: tuple[float, float, float, float], b: tuple[float, float, float, float]) -> bool:
-    ax1, ay1, aw, ah = a
-    bx1, by1, bw, bh = b
-    ax2, ay2 = ax1 + aw, ay1 + ah
-    bx2, by2 = bx1 + bw, by1 + bh
-    return ax1 < bx2 and ax2 > bx1 and ay1 < by2 and ay2 > by1
-
-
-def _extract_fact_candidates(bullets: list[str]) -> list[str]:
-    candidates: list[str] = []
-    seen: set[str] = set()
-    number_pattern = re.compile(r"\d+[.,]?\d*\s?(?:%|x|млн|млрд|км|лет|год|USD|\$)?", flags=re.IGNORECASE)
-
-    for bullet in bullets:
-        cleaned = re.sub(r"\s+", " ", bullet).strip(" .")
-        if not cleaned:
-            continue
-        has_number = bool(number_pattern.search(cleaned))
-        if has_number:
-            entry = cleaned[:70] + ("..." if len(cleaned) > 70 else "")
-        else:
-            entry = cleaned[:58] + ("..." if len(cleaned) > 58 else "")
-        key = entry.casefold()
-        if key in seen:
-            continue
-        seen.add(key)
-        candidates.append(entry)
-        if len(candidates) >= 5:
-            break
-
-    if not candidates and bullets:
-        fallback = re.sub(r"\s+", " ", bullets[0]).strip(" .")
-        if fallback:
-            candidates.append(fallback[:64] + ("..." if len(fallback) > 64 else ""))
-    return candidates
-
-
-def _add_fact_blocks(
-    slide,
-    slide_content: SlideContent,
-    slide_width: int,
-    slide_height: int,
-    font_name: str,
-    text_color: RGBColor,
-    accent_color: RGBColor,
-    blocked_zones: list[tuple[float, float, float, float]],
-) -> None:
-    fact_candidates = _extract_fact_candidates(slide_content.bullets)
-    if not fact_candidates:
-        return
-
-    rng = random.SystemRandom()
-    block_candidates = [
-        (0.73, 0.13, 0.22, 0.12),
-        (0.05, 0.73, 0.23, 0.12),
-        (0.71, 0.72, 0.23, 0.12),
-        (0.03, 0.15, 0.22, 0.12),
-        (0.40, 0.80, 0.22, 0.11),
-        (0.66, 0.53, 0.24, 0.12),
-    ]
-    rng.shuffle(block_candidates)
-    max_blocks = min(2, max(1, len(fact_candidates)))
-    placed = 0
-
-    for candidate_box in block_candidates:
-        if any(_intersects(candidate_box, blocked) for blocked in blocked_zones):
-            continue
-
-        _add_shadowed_card(
-            slide=slide,
-            box=candidate_box,
-            slide_width=slide_width,
-            slide_height=slide_height,
-            fill_color=_shift_color(accent_color, 20),
-            border_color=accent_color,
-            shadow_alpha=0.82,
-        )
-
-        left, top, width, height = _ratio_to_emu(candidate_box, slide_width, slide_height)
-        fact_shape = slide.shapes.add_shape(
-            MSO_AUTO_SHAPE_TYPE.ROUNDED_RECTANGLE,
-            left=left,
-            top=top,
-            width=width,
-            height=height,
-        )
-        fact_shape.fill.background()
-        fact_shape.line.fill.background()
-        text_frame = fact_shape.text_frame
-        text_frame.clear()
-        text_frame.margin_left = Pt(10)
-        text_frame.margin_right = Pt(10)
-        text_frame.margin_top = Pt(6)
-        text_frame.margin_bottom = Pt(6)
-        text_frame.word_wrap = True
-        text_frame.vertical_anchor = MSO_ANCHOR.MIDDLE
-
-        paragraph = text_frame.paragraphs[0]
-        paragraph.text = f"Факт: {fact_candidates[placed % len(fact_candidates)]}"
-        paragraph.font.name = font_name
-        paragraph.font.bold = True
-        paragraph.font.size = Pt(13)
-        paragraph.font.color.rgb = text_color
-        paragraph.alignment = PP_ALIGN.LEFT
-
-        blocked_zones.append(candidate_box)
-        placed += 1
-        if placed >= max_blocks:
-            break
-
-
 def _add_background(slide, slide_width: int, slide_height: int, index: int) -> tuple[RGBColor, RGBColor]:
     bg_color, header_color, accent_color, card_color = _theme_for_index(index)
 
@@ -584,8 +422,6 @@ def _build_presentation_sync(
         pdf_template_path = resolve_pdf_template_asset(template_type)
         static_image_asset = resolve_template_asset(template_type)
 
-        accent_for_slide = _shift_color(color, 26)
-
         if pdf_template_path is not None:
             cache_key = str(pdf_template_path.resolve())
             pdf_pages = pdf_pages_cache.get(cache_key)
@@ -612,7 +448,7 @@ def _build_presentation_sync(
             )
             zone_key = str(static_image_asset.resolve())
         else:
-            _, accent_for_slide = _add_background(slide, presentation.slide_width, presentation.slide_height, index)
+            _add_background(slide, presentation.slide_width, presentation.slide_height, index)
             zone_key = ""
 
         if zone_key:
@@ -630,39 +466,6 @@ def _build_presentation_sync(
         body_zone_for_text = body_zone
         if user_image_path is not None:
             body_zone_for_text, image_zone = _adjust_zones_for_user_image(body_zone, user_image_path)
-
-        _add_shadowed_card(
-            slide=slide,
-            box=title_zone,
-            slide_width=presentation.slide_width,
-            slide_height=presentation.slide_height,
-            fill_color=RGBColor(255, 255, 255),
-            border_color=accent_for_slide,
-            shadow_alpha=0.88,
-        )
-        _add_shadowed_card(
-            slide=slide,
-            box=body_zone_for_text,
-            slide_width=presentation.slide_width,
-            slide_height=presentation.slide_height,
-            fill_color=RGBColor(255, 255, 255),
-            border_color=accent_for_slide,
-            shadow_alpha=0.88,
-        )
-
-        blocked_zones = [title_zone, body_zone_for_text]
-        if image_zone is not None:
-            blocked_zones.append(image_zone)
-        _add_fact_blocks(
-            slide=slide,
-            slide_content=slide_content,
-            slide_width=presentation.slide_width,
-            slide_height=presentation.slide_height,
-            font_name=font_name,
-            text_color=color,
-            accent_color=accent_for_slide,
-            blocked_zones=blocked_zones,
-        )
 
         title_left, title_top, title_width, title_height = _ratio_to_emu(
             title_zone,
