@@ -11,6 +11,10 @@ from urllib.request import Request, urlopen
 from PIL import Image
 
 PEXELS_SEARCH_URL = "https://api.pexels.com/v1/search"
+HTTP_HEADERS = {
+    "User-Agent": "LibraScorpBot/1.0 (+https://pexels.com)",
+    "Accept": "application/json",
+}
 
 
 def _search_pexels(
@@ -22,7 +26,7 @@ def _search_pexels(
     params = urlencode({"query": query, "per_page": per_page, "page": 1})
     request = Request(
         f"{PEXELS_SEARCH_URL}?{params}",
-        headers={"Authorization": api_key},
+        headers={**HTTP_HEADERS, "Authorization": api_key},
         method="GET",
     )
     with urlopen(request, timeout=timeout_sec) as response:
@@ -45,7 +49,7 @@ def _pick_image_url(photo: dict[str, Any]) -> str | None:
 
 
 def _download_bytes(url: str, timeout_sec: int) -> bytes:
-    request = Request(url, method="GET")
+    request = Request(url, headers=HTTP_HEADERS, method="GET")
     with urlopen(request, timeout=timeout_sec) as response:
         return response.read()
 
