@@ -68,7 +68,7 @@ from bot.services.ai_text_presentation_generator import (
 )
 from bot.services.presentation_builder import build_presentation_file
 from bot.services.premium_voice_chat import ask_openrouter_from_text, transcribe_voice_file
-from bot.services.topic_image_fetcher import fetch_topic_images
+from bot.services.topic_image_fetcher import fetch_topic_images, translate_topic_to_russian
 from bot.services.source_extractor import (
     MAX_DOWNLOAD_BYTES,
     SUPPORTED_TEXT_EXTENSIONS,
@@ -534,6 +534,16 @@ async def _finalize_presentation_generation(
             slide_count - len(image_paths),
             settings.auto_topic_images_max_count,
         )
+        topic_for_image_search = topic
+        if lang == "uz":
+            topic_for_image_search = await translate_topic_to_russian(
+                topic=topic,
+                source_lang=lang,
+                openrouter_api_key=settings.openrouter_api_key,
+                openrouter_models=settings.openrouter_models,
+                request_timeout_sec=settings.openrouter_request_timeout_sec,
+                max_model_attempts=settings.openrouter_max_model_attempts,
+            )
         temp_dir_raw = data.get("slide_images_temp_dir")
         if isinstance(temp_dir_raw, str) and temp_dir_raw.strip():
             temp_dir = Path(temp_dir_raw)
@@ -542,7 +552,7 @@ async def _finalize_presentation_generation(
             await state.update_data(slide_images_temp_dir=str(temp_dir))
         try:
             auto_images = await fetch_topic_images(
-                topic=topic,
+                topic=topic_for_image_search,
                 limit=missing_images,
                 destination_dir=temp_dir,
                 min_width=MIN_CUSTOM_SLIDE_IMAGE_WIDTH,

@@ -3,18 +3,21 @@ from __future__ import annotations
 import asyncio
 import io
 import json
+import logging
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 from PIL import Image
+from openai import AsyncOpenAI
 
 PEXELS_SEARCH_URL = "https://api.pexels.com/v1/search"
 HTTP_HEADERS = {
     "User-Agent": "LibraScorpBot/1.0 (+https://pexels.com)",
     "Accept": "application/json",
 }
+logger = logging.getLogger(__name__)
 
 
 def _search_pexels(
@@ -121,3 +124,48 @@ async def fetch_topic_images(
         api_key=api_key.strip(),
         timeout_sec=max(5, timeout_sec),
     )
+
+
+async def translate_topic_to_russian(
+    *,
+    topic: str,
+    source_lang: str,
+    openrouter_api_key: str,
+    openrouter_models: tuple[str, ...],
+    request_timeout_sec: int,
+    max_model_attempts: int,
+) -> str:
+    normalized_topic = topic.strip()
+    if not normalized_topic or source_lang != "uz":
+        return normalized_topic
+    if not openrouter_api_key.strip() or not openrouter_models:
+        return normalized_topic
+
+    client = AsyncOpenAI(base_url="https://openrouter.ai/api/v1", api_key=openrouter_api_key.strip())
+    timeout_sec = max(10, int(request_timeout_sec))
+    models = openrouter_models[: max(1, int(max_model_attempts))]
+
+    for model in models:
+        try:
+            response = await client.chat.completions.create(
+                model=model,
+                messages=[
+                    {
+                        "role": "system",
+                        "content": (
+                            "Translate Uzbek text into natural Russian. "
+                            "Return only the translated text, no notes, no quotes."
+                        ),
+                    },
+                    {"role": "user", "content": normalized_topic[:3000]},
+                ],
+                temperature=0.0,
+                timeout=timeout_sec,
+            )
+            translated = (response.choices[0].message.content or "").strip()
+            if translated:
+                return translated
+        except Exception as exc:
+            logger.warning("Uzbek->Russian topic translation failed (%s): %s", model, exc)
+
+    return normalized_topic

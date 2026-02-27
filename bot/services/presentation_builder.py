@@ -186,16 +186,23 @@ def _adjust_zones_for_user_image(
             image_left = left + text_width + gutter
         return (text_left, top, text_width, height), (image_left, top, image_width, height)
 
-    image_height = min(0.40, max(0.26, height * 0.40))
-    text_height = max(0.20, height - image_height - gutter)
-    image_width = width
-    image_left = left + (width - image_width) / 2.0
     if layout == "top":
+        image_height = min(0.34, max(0.20, height * 0.34))
+        text_height = max(0.22, height - image_height - gutter)
+        image_width = width
+        image_left = left
         image_top = top
         text_top = top + image_height + gutter
-    else:
-        text_top = top
-        image_top = top + text_height + gutter
+        return (left, text_top, width, text_height), (image_left, image_top, image_width, image_height)
+
+    # Keep bottom image compact and pinned to the lower edge so it does not collide with text.
+    bottom_gutter = 0.03
+    image_height = min(0.20, max(0.12, height * 0.22))
+    text_height = max(0.24, height - image_height - bottom_gutter)
+    image_width = width * 0.90
+    image_left = left + (width - image_width) / 2.0
+    text_top = top
+    image_top = top + height - image_height
     return (left, text_top, width, text_height), (image_left, image_top, image_width, image_height)
 
 
