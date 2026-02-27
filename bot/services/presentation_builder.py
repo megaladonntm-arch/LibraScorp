@@ -11,7 +11,7 @@ from PIL import Image, ImageStat
 from pptx import Presentation
 from pptx.dml.color import RGBColor
 from pptx.enum.shapes import MSO_AUTO_SHAPE_TYPE
-from pptx.enum.text import MSO_ANCHOR, PP_ALIGN
+from pptx.enum.text import MSO_ANCHOR, MSO_AUTO_SIZE, PP_ALIGN
 from pptx.util import Pt
 
 from bot.services.ai_text_presentation_generator import (
@@ -176,8 +176,8 @@ def _adjust_zones_for_user_image(
     gutter = 0.02
 
     if layout in {"left", "right"}:
-        image_width = min(0.34, max(0.22, width * 0.35))
-        text_width = max(0.24, width - image_width - gutter)
+        image_width = min(0.42, max(0.28, width * 0.40))
+        text_width = max(0.30, width - image_width - gutter)
         if layout == "left":
             image_left = left
             text_left = left + image_width + gutter
@@ -186,9 +186,9 @@ def _adjust_zones_for_user_image(
             image_left = left + text_width + gutter
         return (text_left, top, text_width, height), (image_left, top, image_width, height)
 
-    image_height = min(0.30, max(0.18, height * 0.34))
-    text_height = max(0.22, height - image_height - gutter)
-    image_width = width * 0.92
+    image_height = min(0.40, max(0.26, height * 0.40))
+    text_height = max(0.20, height - image_height - gutter)
+    image_width = width
     image_left = left + (width - image_width) / 2.0
     if layout == "top":
         image_top = top
@@ -217,16 +217,25 @@ def _add_user_image(
     except Exception:
         return
 
-    fit_width, fit_height = _fit_inside(image_width, image_height, zone_width, zone_height)
-    left = zone_left + max(0, (zone_width - fit_width) // 2)
-    top = zone_top + max(0, (zone_height - fit_height) // 2)
-    slide.shapes.add_picture(
+    picture = slide.shapes.add_picture(
         str(image_path),
-        left=left,
-        top=top,
-        width=fit_width,
-        height=fit_height,
+        left=zone_left,
+        top=zone_top,
+        width=zone_width,
+        height=zone_height,
     )
+    zone_ratio = zone_width / float(zone_height)
+    image_ratio = image_width / float(image_height)
+    if image_ratio > zone_ratio:
+        visible = zone_ratio / image_ratio
+        crop_each = max(0.0, min(0.49, (1.0 - visible) / 2.0))
+        picture.crop_left = crop_each
+        picture.crop_right = crop_each
+    elif image_ratio < zone_ratio:
+        visible = image_ratio / zone_ratio
+        crop_each = max(0.0, min(0.49, (1.0 - visible) / 2.0))
+        picture.crop_top = crop_each
+        picture.crop_bottom = crop_each
 
 
 def _ratio_to_emu(
@@ -498,6 +507,7 @@ def _build_presentation_sync(
         body_frame.margin_bottom = 0
         body_frame.vertical_anchor = MSO_ANCHOR.TOP
         body_frame.word_wrap = True
+        body_frame.auto_size = MSO_AUTO_SIZE.TEXT_TO_FIT_SHAPE
         body_font_size = _estimate_body_font_size(slide_content)
 
         for bullet_index, bullet in enumerate(slide_content.bullets):
