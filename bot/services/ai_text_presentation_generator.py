@@ -492,11 +492,17 @@ def _normalize_slides(topic: str, slide_count: int, raw: Any, lang: str) -> list
     return slides[:slide_count]
 
 
-async def _generate_async(topic: str, slide_count: int, template_type: int, lang: str) -> list[SlideContent]:
+async def _generate_async(
+    prompt_topic: str,
+    slide_count: int,
+    template_type: int,
+    lang: str,
+    fallback_topic: str,
+) -> list[SlideContent]:
     api_key = settings.openrouter_api_key.strip()
     if not api_key:
         logger.error("OPENROUTER_API_KEY is empty in .env")
-        return _fallback_slides(topic, slide_count, lang)
+        return _fallback_slides(fallback_topic, slide_count, lang)
 
     language_code = _normalize_language_code(lang)
     language_name = LANGUAGE_NAMES[language_code]
@@ -505,7 +511,7 @@ async def _generate_async(topic: str, slide_count: int, template_type: int, lang
 
     prompt = (
         "Create deep, practical, audience-ready slide content for a presentation. Return strict JSON only.\n"
-        f"Topic: {topic}\n"
+        f"Topic: {prompt_topic}\n"
         f"Slide count: {slide_count}\n"
         f"Template type: {template_type}\n\n"
         f"Output language: {language_name} (code: {language_code})\n\n"
@@ -534,6 +540,8 @@ async def _generate_async(topic: str, slide_count: int, template_type: int, lang
         "- Avoid one-liners, generic statements, and obvious textbook facts.\n"
         "- Prefer concrete, decision-useful information over abstract wording.\n"
         "- Mix styles naturally across slides: facts, full analysis, interesting insights, and practical actions.\n"
+        "- If source material is present in the topic block, use it as the only factual basis.\n"
+        "- Do not invent facts that are missing in the provided source material.\n"
         "- No markdown formatting, no code blocks, JSON only."
     )
 
@@ -563,7 +571,7 @@ async def _generate_async(topic: str, slide_count: int, template_type: int, lang
             )
             content = response.choices[0].message.content or ""
             parsed = _extract_json(content)
-            slides = _normalize_slides(topic, slide_count, parsed, language_code)
+            slides = _normalize_slides(fallback_topic, slide_count, parsed, language_code)
             logger.info("Slides generated via model: %s", model)
             return slides
         except Exception as exc:
@@ -571,7 +579,7 @@ async def _generate_async(topic: str, slide_count: int, template_type: int, lang
             logger.warning("OpenRouter model failed (%s): %s", model, exc)
 
     logger.error("All OpenRouter attempts failed: %s", last_error)
-    return _fallback_slides(topic, slide_count, language_code, slide_modes=slide_modes)
+    return _fallback_slides(fallback_topic, slide_count, language_code, slide_modes=slide_modes)
 
 
 async def generate_slide_content(
@@ -588,16 +596,22 @@ async def generate_slide_content(
 
     try:
         effective_lang = _normalize_language_code(lang)
-        enriched_topic = topic
+        prompt_topic = topic
         if source_material:
             normalized_source = re.sub(r"\s+", " ", source_material).strip()[:12000]
-            enriched_topic = (
+            prompt_topic = (
                 f"{topic}\n\n"
                 "Source material (must be used as primary basis):\n"
                 f"{normalized_source}\n\n"
                 "Important: use this source as factual base for slide content."
             )
-        return await _generate_async(enriched_topic, slide_count, int(effective_template_type), effective_lang)
+        return await _generate_async(
+            prompt_topic,
+            slide_count,
+            int(effective_template_type),
+            effective_lang,
+            topic,
+        )
     except Exception as exc:
         logger.exception("Unexpected error while generating slides: %s", exc)
         return _fallback_slides(topic, slide_count, _normalize_language_code(lang))

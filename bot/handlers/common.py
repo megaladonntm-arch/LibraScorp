@@ -69,6 +69,7 @@ from bot.services.ai_text_presentation_generator import (
 from bot.services.presentation_builder import build_presentation_file
 from bot.services.premium_voice_chat import ask_openrouter_from_text, transcribe_voice_file
 from bot.services.topic_image_fetcher import fetch_topic_images, translate_topic_to_russian
+from bot.services.wikipedia_source import fetch_russian_wikipedia_source
 from bot.services.source_extractor import (
     MAX_DOWNLOAD_BYTES,
     SUPPORTED_TEXT_EXTENSIONS,
@@ -529,21 +530,23 @@ async def _finalize_presentation_generation(
         if isinstance(item, str) and Path(item).exists():
             image_paths.append(item)
 
+    topic_for_russian_sources = topic
+    if lang == "uz":
+        topic_for_russian_sources = await translate_topic_to_russian(
+            topic=topic,
+            source_lang=lang,
+            openrouter_api_key=settings.openrouter_api_key,
+            openrouter_models=settings.openrouter_models,
+            request_timeout_sec=settings.openrouter_request_timeout_sec,
+            max_model_attempts=settings.openrouter_max_model_attempts,
+        )
+
     if settings.auto_topic_images_enabled and len(image_paths) < slide_count:
         missing_images = min(
             slide_count - len(image_paths),
             settings.auto_topic_images_max_count,
         )
-        topic_for_image_search = topic
-        if lang == "uz":
-            topic_for_image_search = await translate_topic_to_russian(
-                topic=topic,
-                source_lang=lang,
-                openrouter_api_key=settings.openrouter_api_key,
-                openrouter_models=settings.openrouter_models,
-                request_timeout_sec=settings.openrouter_request_timeout_sec,
-                max_model_attempts=settings.openrouter_max_model_attempts,
-            )
+        topic_for_image_search = topic_for_russian_sources if topic_for_russian_sources.strip() else topic
         temp_dir_raw = data.get("slide_images_temp_dir")
         if isinstance(temp_dir_raw, str) and temp_dir_raw.strip():
             temp_dir = Path(temp_dir_raw)
@@ -582,12 +585,26 @@ async def _finalize_presentation_generation(
     restore_token = True
     extra_slide = 1 if creator_names else 0
     try:
+        wikipedia_source = await fetch_russian_wikipedia_source(topic_for_russian_sources)
+        effective_source_material = source_material
+        if wikipedia_source is not None:
+            effective_source_material = (
+                f"Russian Wikipedia article: {wikipedia_source.resolved_title}\n"
+                f"URL: {wikipedia_source.page_url}\n"
+                f"Content:\n{wikipedia_source.text}"
+            )
+        elif source_material:
+            logger.warning(
+                "Wikipedia source unavailable for topic '%s'; falling back to user-provided source.",
+                topic_for_russian_sources,
+            )
+
         slides = await generate_slide_content(
             topic=topic,
             slide_count=slide_count,
             template_type=template_types[0] if template_types else 1,
             lang=lang,
-            source_material=source_material,
+            source_material=effective_source_material,
         )
         file_path = await build_presentation_file(
             topic=topic,
