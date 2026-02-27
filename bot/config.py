@@ -30,6 +30,10 @@ class Settings:
     openrouter_request_timeout_sec: int
     openrouter_max_model_attempts: int
     database_url: str
+    auto_topic_images_enabled: bool
+    auto_topic_images_max_count: int
+    pexels_api_key: str
+    pexels_request_timeout_sec: int
 
 
 def _parse_int(name: str, default: int) -> int:
@@ -40,6 +44,13 @@ def _parse_int(name: str, default: int) -> int:
         return int(value.strip())
     except ValueError as exc:
         raise ValueError(f"Environment variable {name} must be an integer") from exc
+
+
+def _parse_bool(name: str, default: bool) -> bool:
+    value = os.getenv(name)
+    if value is None or not value.strip():
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _parse_models() -> tuple[str, ...]:
@@ -90,4 +101,8 @@ def load_settings() -> Settings:
         openrouter_request_timeout_sec=max(10, _parse_int("OPENROUTER_TIMEOUT_SEC", 40)),
         openrouter_max_model_attempts=max(1, _parse_int("OPENROUTER_MAX_MODEL_ATTEMPTS", 2)),
         database_url=_build_database_url(),
+        auto_topic_images_enabled=_parse_bool("AUTO_TOPIC_IMAGES_ENABLED", True),
+        auto_topic_images_max_count=max(1, _parse_int("AUTO_TOPIC_IMAGES_MAX_COUNT", 20)),
+        pexels_api_key=os.getenv("PEXELS_API_KEY", "").strip(),
+        pexels_request_timeout_sec=max(5, _parse_int("PEXELS_TIMEOUT_SEC", 15)),
     )

@@ -68,6 +68,7 @@ from bot.services.ai_text_presentation_generator import (
 )
 from bot.services.presentation_builder import build_presentation_file
 from bot.services.premium_voice_chat import ask_openrouter_from_text, transcribe_voice_file
+from bot.services.topic_image_fetcher import fetch_topic_images
 from bot.services.source_extractor import (
     MAX_DOWNLOAD_BYTES,
     SUPPORTED_TEXT_EXTENSIONS,
@@ -527,6 +528,33 @@ async def _finalize_presentation_generation(
     for item in data.get("slide_image_paths", []):
         if isinstance(item, str) and Path(item).exists():
             image_paths.append(item)
+
+    if settings.auto_topic_images_enabled and len(image_paths) < slide_count:
+        missing_images = min(
+            slide_count - len(image_paths),
+            settings.auto_topic_images_max_count,
+        )
+        temp_dir_raw = data.get("slide_images_temp_dir")
+        if isinstance(temp_dir_raw, str) and temp_dir_raw.strip():
+            temp_dir = Path(temp_dir_raw)
+        else:
+            temp_dir = Path(tempfile.mkdtemp(prefix="tg_slide_images_"))
+            await state.update_data(slide_images_temp_dir=str(temp_dir))
+        try:
+            auto_images = await fetch_topic_images(
+                topic=topic,
+                limit=missing_images,
+                destination_dir=temp_dir,
+                min_width=MIN_CUSTOM_SLIDE_IMAGE_WIDTH,
+                min_height=MIN_CUSTOM_SLIDE_IMAGE_HEIGHT,
+                api_key=settings.pexels_api_key,
+                timeout_sec=settings.pexels_request_timeout_sec,
+            )
+            if auto_images:
+                image_paths.extend(str(path) for path in auto_images)
+                await state.update_data(slide_image_paths=image_paths)
+        except Exception:
+            logger.exception("Failed to auto-fetch topic images for user %s", message.from_user.id)
 
     ok, tokens_left = await try_spend_user_token(message.from_user.id, settings.default_tokens)
     if not ok:
