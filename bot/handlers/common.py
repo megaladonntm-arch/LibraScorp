@@ -46,7 +46,6 @@ from bot.db import (
     set_user_ban,
     set_premium_user,
     set_user_language,
-    try_spend_user_token,
     upsert_global_template_combo,
     upsert_user_template_combo,
 )
@@ -541,9 +540,10 @@ async def _finalize_presentation_generation(
             max_model_attempts=settings.openrouter_max_model_attempts,
         )
 
-    if settings.auto_topic_images_enabled and len(image_paths) < slide_count:
+    min_images_required = max(2, slide_count * 2)
+    if settings.auto_topic_images_enabled and len(image_paths) < min_images_required:
         missing_images = min(
-            slide_count - len(image_paths),
+            min_images_required - len(image_paths),
             settings.auto_topic_images_max_count,
         )
         topic_for_image_search = topic_for_russian_sources if topic_for_russian_sources.strip() else topic
@@ -569,20 +569,17 @@ async def _finalize_presentation_generation(
         except Exception:
             logger.exception("Failed to auto-fetch topic images for user %s", message.from_user.id)
 
-    ok, tokens_left = await try_spend_user_token(message.from_user.id, settings.default_tokens)
-    if not ok:
-        await _cleanup_slide_image_temp_dir(state)
-        await state.clear()
-        await message.answer(
-            t(lang, "no_tokens"),
-            reply_markup=build_main_menu(lang=lang, is_admin=_is_admin(message)),
-        )
-        return
+    if image_paths and len(image_paths) < min_images_required:
+        repeated: list[str] = []
+        idx = 0
+        while len(repeated) < min_images_required:
+            repeated.append(image_paths[idx % len(image_paths)])
+            idx += 1
+        image_paths = repeated
 
     await message.answer(t(lang, "generating"))
 
     file_path: Path | None = None
-    restore_token = True
     extra_slide = 1 if creator_names else 0
     try:
         wikipedia_source = await fetch_russian_wikipedia_source(topic_for_russian_sources)
@@ -625,7 +622,6 @@ async def _finalize_presentation_generation(
             font_color=font_color,
             language=lang,
         )
-        restore_token = False
         await message.answer_document(
             document=FSInputFile(file_path),
             caption=t(
@@ -634,7 +630,6 @@ async def _finalize_presentation_generation(
                 slides=slide_count + extra_slide,
                 font=font_name,
                 color=font_color_label,
-                tokens=tokens_left,
             ),
             reply_markup=build_main_menu(lang=lang, is_admin=_is_admin(message)),
         )
@@ -645,8 +640,6 @@ async def _finalize_presentation_generation(
             reply_markup=build_main_menu(lang=lang, is_admin=_is_admin(message)),
         )
     finally:
-        if restore_token:
-            await add_user_tokens(message.from_user.id, 1, settings.default_tokens)
         if file_path is not None:
             shutil.rmtree(file_path.parent, ignore_errors=True)
         await _cleanup_slide_image_temp_dir(state)
@@ -736,12 +729,6 @@ async def cmd_templates(message: Message) -> None:
 async def about_bot(message: Message) -> None:
     lang, _ = await _lang_and_tokens(message)
     await message.answer(t(lang, "about"))
-
-
-@router.message(Command("tokens"))
-async def my_tokens(message: Message) -> None:
-    lang, tokens = await _lang_and_tokens(message)
-    await message.answer(t(lang, "my_tokens", tokens=tokens))
 
 
 @router.message(Command("my_presentations"))
@@ -1503,19 +1490,13 @@ async def premium_voice_chat(message: Message) -> None:
 async def start_presentation_generation(message: Message, state: FSMContext) -> None:
     if message.from_user is None:
         return
-    lang, tokens = await _lang_and_tokens(message)
-    if tokens <= 0:
-        await message.answer(
-            t(lang, "no_tokens"),
-            reply_markup=build_main_menu(lang=lang, is_admin=_is_admin(message)),
-        )
-        return
+    lang, _ = await _lang_and_tokens(message)
 
     await _cleanup_slide_image_temp_dir(state)
     await state.clear()
     await state.set_state(PresentationForm.slide_count)
     await message.answer(
-        t(lang, "ask_slide_count", tokens=tokens),
+        t(lang, "ask_slide_count"),
         reply_markup=ReplyKeyboardRemove(),
     )
 
@@ -1702,9 +1683,7 @@ async def process_template_type(message: Message, state: FSMContext) -> None:
             await state.clear()
             return
         await state.set_state(PresentationForm.slide_count)
-        await message.answer(
-            t(lang, "ask_slide_count", tokens=(await get_user_data(message.from_user.id, settings.default_tokens))[0])
-        )
+        await message.answer(t(lang, "ask_slide_count"))
         return
 
     data = await state.get_data()
@@ -1922,7 +1901,7 @@ async def process_creator_names(message: Message, state: FSMContext) -> None:
         slide_images_temp_dir=None,
     )
     await state.set_state(PresentationForm.slide_images)
-    await message.answer(t(lang, "ask_slide_images", max_count=slide_count))
+    await message.answer(t(lang, "ask_slide_images", max_count=slide_count * 2))
 
 
 @router.message(PresentationForm.slide_images)
@@ -1935,6 +1914,7 @@ async def process_slide_images(message: Message, state: FSMContext) -> None:
     lang, _ = await _lang_and_tokens(message)
     data = await state.get_data()
     slide_count = int(data.get("slide_count", 0))
+    max_image_count = max(2, slide_count * 2)
     if slide_count <= 0:
         await _cleanup_slide_image_temp_dir(state)
         await state.clear()
@@ -1981,8 +1961,8 @@ async def process_slide_images(message: Message, state: FSMContext) -> None:
         await message.answer(t(lang, "slide_images_file_too_large"))
         return
 
-    if len(stored_paths) >= slide_count:
-        await message.answer(t(lang, "slide_images_limit_reached", max_count=slide_count))
+    if len(stored_paths) >= max_image_count:
+        await message.answer(t(lang, "slide_images_limit_reached", max_count=max_image_count))
         await _finalize_presentation_generation(message, state, lang)
         return
 
@@ -2022,10 +2002,10 @@ async def process_slide_images(message: Message, state: FSMContext) -> None:
             lang,
             "slide_images_photo_saved",
             current=len(stored_paths),
-            max_count=slide_count,
+            max_count=max_image_count,
         )
     )
 
-    if len(stored_paths) >= slide_count:
-        await message.answer(t(lang, "slide_images_limit_reached", max_count=slide_count))
+    if len(stored_paths) >= max_image_count:
+        await message.answer(t(lang, "slide_images_limit_reached", max_count=max_image_count))
         await _finalize_presentation_generation(message, state, lang)

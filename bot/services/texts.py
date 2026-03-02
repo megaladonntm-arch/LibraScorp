@@ -2,6 +2,7 @@
     "ru": {
         "welcome": (
             "Добро пожаловать в бот для создания презентаций.\n\n"
+            "Приложение полностью бесплатное для всех.\n\n"
             "Нажмите «Создать презентацию» или введите /presentation, чтобы начать."
         ),
         "help": (
@@ -13,7 +14,7 @@
             "5. Отправьте тему презентации.\n"
             "6. При желании добавьте источник: текст, ссылку или файл.\n\n"
             "Лимиты и команды:\n"
-            "- 1 презентация = 1 токен\n"
+            "- Сервис полностью бесплатный для всех\n"
             "- Отмена текущего шага: /cancel\n"
             "- Быстрый запуск: /presentation"
         ),
@@ -25,6 +26,7 @@
     "en": {
         "welcome": (
             "Welcome to the presentation generator bot.\n\n"
+            "The app is completely free for everyone.\n\n"
             "Press \"Create presentation\" or type /presentation to start."
         ),
         "help": (
@@ -36,7 +38,7 @@
             "5. Send your presentation topic.\n"
             "6. Optionally add source material: text, link, or file.\n\n"
             "Limits and commands:\n"
-            "- 1 presentation = 1 token\n"
+            "- The service is completely free for everyone\n"
             "- Cancel current flow: /cancel\n"
             "- Quick start: /presentation"
         ),
@@ -48,6 +50,7 @@
     "uz": {
         "welcome": (
             "Taqdimot yaratish botiga xush kelibsiz.\n\n"
+            "Ilova hamma uchun mutlaqo bepul.\n\n"
             "Boshlash uchun \"Taqdimot yaratish\" tugmasini bosing yoki /presentation buyrug'ini yuboring."
         ),
         "help": (
@@ -59,7 +62,7 @@
             "5. Taqdimot mavzusini yuboring.\n"
             "6. Ixtiyoriy ravishda manba qo'shing: matn, havola yoki fayl.\n\n"
             "Limitlar va buyruqlar:\n"
-            "- 1 taqdimot = 1 token\n"
+            "- Xizmat hamma uchun mutlaqo bepul\n"
             "- Joriy jarayonni bekor qilish: /cancel\n"
             "- Tez boshlash: /presentation"
         ),

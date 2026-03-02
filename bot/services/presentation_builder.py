@@ -27,6 +27,7 @@ except Exception:  # pragma: no cover
 
 TITLE_ZONE = (0.08, 0.08, 0.84, 0.16)
 BODY_ZONE = (0.10, 0.26, 0.80, 0.58)
+BODY_ZONE_NO_TITLE = (0.08, 0.10, 0.84, 0.78)
 TITLE_ZONE_CANDIDATES = (
     (0.07, 0.06, 0.86, 0.18),
     (0.08, 0.08, 0.84, 0.16),
@@ -148,7 +149,7 @@ def _add_background_image_cover(
 
 
 def _pick_image_layout(image_path: Path) -> str:
-    layouts = ("left", "right", "top", "bottom")
+    layouts = ("left", "right")
     rng = random.SystemRandom()
     try:
         with Image.open(image_path) as img:
@@ -161,49 +162,55 @@ def _pick_image_layout(image_path: Path) -> str:
 
     # Keep random feel, but bias by image aspect for better visual balance.
     if img_width >= img_height:
-        weighted = ("top", "bottom", "left", "right", "top", "bottom")
+        weighted = ("right", "left", "right")
     else:
-        weighted = ("left", "right", "top", "bottom", "left", "right")
+        weighted = ("left", "right", "left")
     return rng.choice(weighted)
 
 
-def _adjust_zones_for_user_image(
-    body_zone: tuple[float, float, float, float],
-    image_path: Path,
-) -> tuple[tuple[float, float, float, float], tuple[float, float, float, float]]:
-    left, top, width, height = body_zone
-    layout = _pick_image_layout(image_path)
-    gutter = 0.02
+def _select_slide_image_pair(
+    prepared_user_images: list[Path],
+    slide_index: int,
+) -> tuple[Path | None, Path | None]:
+    if not prepared_user_images:
+        return None, None
+    if len(prepared_user_images) == 1:
+        image = prepared_user_images[0]
+        return image, image
+    first_idx = (slide_index * 2) % len(prepared_user_images)
+    second_idx = (first_idx + 1) % len(prepared_user_images)
+    return prepared_user_images[first_idx], prepared_user_images[second_idx]
 
-    if layout in {"left", "right"}:
-        image_width = min(0.42, max(0.28, width * 0.40))
-        text_width = max(0.30, width - image_width - gutter)
-        if layout == "left":
-            image_left = left
-            text_left = left + image_width + gutter
-        else:
-            text_left = left
-            image_left = left + text_width + gutter
-        return (text_left, top, text_width, height), (image_left, top, image_width, height)
 
-    if layout == "top":
-        image_height = min(0.34, max(0.20, height * 0.34))
-        text_height = max(0.22, height - image_height - gutter)
-        image_width = width
-        image_left = left
-        image_top = top
-        text_top = top + image_height + gutter
-        return (left, text_top, width, text_height), (image_left, image_top, image_width, image_height)
+def _adjust_zones_for_dual_images(
+    has_title: bool,
+    preferred_large_layout: str,
+) -> tuple[
+    tuple[float, float, float, float],
+    tuple[float, float, float, float],
+    tuple[float, float, float, float],
+]:
+    if has_title:
+        text_top = 0.24
+        text_height = 0.64
+        large_top = 0.18
+        large_height = 0.70
+    else:
+        text_top = 0.10
+        text_height = 0.78
+        large_top = 0.08
+        large_height = 0.82
 
-    # Keep bottom image compact and pinned to the lower edge so it does not collide with text.
-    bottom_gutter = 0.03
-    image_height = min(0.20, max(0.12, height * 0.22))
-    text_height = max(0.24, height - image_height - bottom_gutter)
-    image_width = width * 0.90
-    image_left = left + (width - image_width) / 2.0
-    text_top = top
-    image_top = top + height - image_height
-    return (left, text_top, width, text_height), (image_left, image_top, image_width, image_height)
+    if preferred_large_layout == "left":
+        text_zone = (0.53, text_top, 0.40, text_height)
+        large_zone = (0.05, large_top, 0.45, large_height)
+        small_zone = (0.34, 0.62 if has_title else 0.66, 0.16, 0.22)
+    else:
+        text_zone = (0.07, text_top, 0.40, text_height)
+        large_zone = (0.50, large_top, 0.45, large_height)
+        small_zone = (0.50, 0.62 if has_title else 0.66, 0.16, 0.22)
+
+    return text_zone, large_zone, small_zone
 
 
 def _add_user_image(
@@ -461,39 +468,52 @@ def _build_presentation_sync(
         else:
             title_zone, body_zone = TITLE_ZONE, BODY_ZONE
 
-        user_image_path = prepared_user_images[index] if index < len(prepared_user_images) else None
-        image_zone: tuple[float, float, float, float] | None = None
-        body_zone_for_text = body_zone
-        if user_image_path is not None:
-            body_zone_for_text, image_zone = _adjust_zones_for_user_image(body_zone, user_image_path)
+        has_title = index == 0
+        title_text = topic if has_title else ""
+        first_image, second_image = _select_slide_image_pair(prepared_user_images, index)
+        if first_image is None and zone_key:
+            fallback_image = Path(zone_key)
+            if fallback_image.exists():
+                first_image = fallback_image
+                second_image = fallback_image
+        body_zone_for_text = body_zone if has_title else BODY_ZONE_NO_TITLE
+        large_image_zone: tuple[float, float, float, float] | None = None
+        small_image_zone: tuple[float, float, float, float] | None = None
+        if first_image is not None and second_image is not None:
+            preferred_layout = _pick_image_layout(first_image)
+            body_zone_for_text, large_image_zone, small_image_zone = _adjust_zones_for_dual_images(
+                has_title=has_title,
+                preferred_large_layout=preferred_layout,
+            )
 
-        title_left, title_top, title_width, title_height = _ratio_to_emu(
-            title_zone,
-            presentation.slide_width,
-            presentation.slide_height,
-        )
-        title_box = slide.shapes.add_textbox(
-            left=title_left,
-            top=title_top,
-            width=title_width,
-            height=title_height,
-        )
-        title_frame = title_box.text_frame
-        title_frame.clear()
-        title_frame.margin_left = 0
-        title_frame.margin_right = 0
-        title_frame.margin_top = 0
-        title_frame.margin_bottom = 0
-        title_frame.vertical_anchor = MSO_ANCHOR.MIDDLE
-        title_frame.word_wrap = True
-        title_paragraph = title_frame.paragraphs[0]
-        title_paragraph.text = slide_content.title
-        title_paragraph.font.bold = True
-        title_paragraph.font.name = font_name
-        title_paragraph.font.size = Pt(_estimate_title_font_size(slide_content.title))
-        title_paragraph.font.color.rgb = color
-        title_paragraph.alignment = PP_ALIGN.CENTER
-        title_paragraph.space_after = Pt(2)
+        if has_title:
+            title_left, title_top, title_width, title_height = _ratio_to_emu(
+                title_zone,
+                presentation.slide_width,
+                presentation.slide_height,
+            )
+            title_box = slide.shapes.add_textbox(
+                left=title_left,
+                top=title_top,
+                width=title_width,
+                height=title_height,
+            )
+            title_frame = title_box.text_frame
+            title_frame.clear()
+            title_frame.margin_left = 0
+            title_frame.margin_right = 0
+            title_frame.margin_top = 0
+            title_frame.margin_bottom = 0
+            title_frame.vertical_anchor = MSO_ANCHOR.MIDDLE
+            title_frame.word_wrap = True
+            title_paragraph = title_frame.paragraphs[0]
+            title_paragraph.text = title_text
+            title_paragraph.font.bold = True
+            title_paragraph.font.name = font_name
+            title_paragraph.font.size = Pt(_estimate_title_font_size(title_text))
+            title_paragraph.font.color.rgb = color
+            title_paragraph.alignment = PP_ALIGN.CENTER
+            title_paragraph.space_after = Pt(2)
 
         body_left, body_top, body_width, body_height = _ratio_to_emu(
             body_zone_for_text,
@@ -527,11 +547,19 @@ def _build_presentation_sync(
             paragraph.alignment = PP_ALIGN.LEFT
             paragraph.space_after = Pt(5)
 
-        if user_image_path is not None and image_zone is not None:
+        if first_image is not None and large_image_zone is not None:
             _add_user_image(
                 slide=slide,
-                image_path=user_image_path,
-                image_zone=image_zone,
+                image_path=first_image,
+                image_zone=large_image_zone,
+                slide_width=presentation.slide_width,
+                slide_height=presentation.slide_height,
+            )
+        if second_image is not None and small_image_zone is not None:
+            _add_user_image(
+                slide=slide,
+                image_path=second_image,
+                image_zone=small_image_zone,
                 slide_width=presentation.slide_width,
                 slide_height=presentation.slide_height,
             )
@@ -546,29 +574,11 @@ def _build_presentation_sync(
             creator_index,
         )
 
-        title_box = final_slide.shapes.add_textbox(
-            left=int(presentation.slide_width * 0.10),
-            top=int(presentation.slide_height * 0.30),
-            width=int(presentation.slide_width * 0.80),
-            height=int(presentation.slide_height * 0.16),
-        )
-        title_frame = title_box.text_frame
-        title_frame.clear()
-        title_frame.vertical_anchor = MSO_ANCHOR.MIDDLE
-        title_frame.word_wrap = True
-        title_paragraph = title_frame.paragraphs[0]
-        title_paragraph.text = creator_title
-        title_paragraph.font.bold = True
-        title_paragraph.font.name = font_name
-        title_paragraph.font.size = Pt(34)
-        title_paragraph.font.color.rgb = color
-        title_paragraph.alignment = PP_ALIGN.CENTER
-
         names_box = final_slide.shapes.add_textbox(
             left=int(presentation.slide_width * 0.10),
-            top=int(presentation.slide_height * 0.48),
+            top=int(presentation.slide_height * 0.34),
             width=int(presentation.slide_width * 0.80),
-            height=int(presentation.slide_height * 0.28),
+            height=int(presentation.slide_height * 0.36),
         )
         names_frame = names_box.text_frame
         names_frame.clear()
