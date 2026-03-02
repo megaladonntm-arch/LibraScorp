@@ -26,6 +26,7 @@ except Exception:  # pragma: no cover
     fitz = None
 
 TITLE_ZONE = (0.08, 0.08, 0.84, 0.16)
+FIRST_SLIDE_TITLE_ZONE = (0.08, 0.03, 0.84, 0.12)
 BODY_ZONE = (0.10, 0.26, 0.80, 0.58)
 BODY_ZONE_NO_TITLE = (0.08, 0.10, 0.84, 0.78)
 TITLE_ZONE_CANDIDATES = (
@@ -149,7 +150,7 @@ def _add_background_image_cover(
 
 
 def _pick_image_layout(image_path: Path) -> str:
-    layouts = ("left", "right")
+    layouts = ("left", "right", "top", "bottom")
     rng = random.SystemRandom()
     try:
         with Image.open(image_path) as img:
@@ -162,9 +163,9 @@ def _pick_image_layout(image_path: Path) -> str:
 
     # Keep random feel, but bias by image aspect for better visual balance.
     if img_width >= img_height:
-        weighted = ("right", "left", "right")
+        weighted = ("top", "bottom", "right", "left", "top")
     else:
-        weighted = ("left", "right", "left")
+        weighted = ("left", "right", "top", "bottom", "right")
     return rng.choice(weighted)
 
 
@@ -190,6 +191,18 @@ def _adjust_zones_for_dual_images(
     tuple[float, float, float, float],
     tuple[float, float, float, float],
 ]:
+    if preferred_large_layout == "top":
+        text_zone = (0.08, 0.50 if has_title else 0.44, 0.84, 0.42 if has_title else 0.48)
+        large_zone = (0.06, 0.10 if has_title else 0.06, 0.88, 0.30 if has_title else 0.34)
+        small_zone = (0.68, 0.38 if has_title else 0.34, 0.24, 0.16)
+        return text_zone, large_zone, small_zone
+
+    if preferred_large_layout == "bottom":
+        text_zone = (0.08, 0.14 if has_title else 0.10, 0.84, 0.44 if has_title else 0.48)
+        large_zone = (0.06, 0.62, 0.88, 0.30)
+        small_zone = (0.08, 0.48, 0.22, 0.14)
+        return text_zone, large_zone, small_zone
+
     if has_title:
         text_top = 0.24
         text_height = 0.64
@@ -470,6 +483,8 @@ def _build_presentation_sync(
 
         has_title = index == 0
         title_text = topic if has_title else ""
+        if has_title:
+            title_zone = FIRST_SLIDE_TITLE_ZONE
         first_image, second_image = _select_slide_image_pair(prepared_user_images, index)
         if first_image is None and zone_key:
             fallback_image = Path(zone_key)
