@@ -169,61 +169,47 @@ def _pick_image_layout(image_path: Path) -> str:
     return rng.choice(weighted)
 
 
-def _select_slide_image_pair(
+def _select_slide_image(
     prepared_user_images: list[Path],
     slide_index: int,
-) -> tuple[Path | None, Path | None]:
+) -> Path | None:
     if not prepared_user_images:
-        return None, None
-    if len(prepared_user_images) == 1:
-        image = prepared_user_images[0]
-        return image, image
-    first_idx = (slide_index * 2) % len(prepared_user_images)
-    second_idx = (first_idx + 1) % len(prepared_user_images)
-    return prepared_user_images[first_idx], prepared_user_images[second_idx]
+        return None
+    return prepared_user_images[slide_index % len(prepared_user_images)]
 
 
-def _adjust_zones_for_dual_images(
+def _adjust_zones_for_single_image(
     has_title: bool,
-    preferred_large_layout: str,
-) -> tuple[
-    tuple[float, float, float, float],
-    tuple[float, float, float, float],
-    tuple[float, float, float, float],
-]:
-    if preferred_large_layout == "top":
+    image_layout: str,
+) -> tuple[tuple[float, float, float, float], tuple[float, float, float, float]]:
+    if image_layout == "top":
         text_zone = (0.08, 0.50 if has_title else 0.44, 0.84, 0.42 if has_title else 0.48)
-        large_zone = (0.06, 0.10 if has_title else 0.06, 0.88, 0.30 if has_title else 0.34)
-        small_zone = (0.68, 0.38 if has_title else 0.34, 0.24, 0.16)
-        return text_zone, large_zone, small_zone
+        image_zone = (0.06, 0.10 if has_title else 0.06, 0.88, 0.30 if has_title else 0.34)
+        return text_zone, image_zone
 
-    if preferred_large_layout == "bottom":
+    if image_layout == "bottom":
         text_zone = (0.08, 0.14 if has_title else 0.10, 0.84, 0.44 if has_title else 0.48)
-        large_zone = (0.06, 0.62, 0.88, 0.30)
-        small_zone = (0.08, 0.48, 0.22, 0.14)
-        return text_zone, large_zone, small_zone
+        image_zone = (0.06, 0.62, 0.88, 0.30)
+        return text_zone, image_zone
 
     if has_title:
         text_top = 0.24
         text_height = 0.64
-        large_top = 0.18
-        large_height = 0.70
+        image_top = 0.18
+        image_height = 0.70
     else:
         text_top = 0.10
         text_height = 0.78
-        large_top = 0.08
-        large_height = 0.82
+        image_top = 0.08
+        image_height = 0.82
 
-    if preferred_large_layout == "left":
+    if image_layout == "left":
         text_zone = (0.53, text_top, 0.40, text_height)
-        large_zone = (0.05, large_top, 0.45, large_height)
-        small_zone = (0.34, 0.62 if has_title else 0.66, 0.16, 0.22)
+        image_zone = (0.05, image_top, 0.45, image_height)
     else:
         text_zone = (0.07, text_top, 0.40, text_height)
-        large_zone = (0.50, large_top, 0.45, large_height)
-        small_zone = (0.50, 0.62 if has_title else 0.66, 0.16, 0.22)
-
-    return text_zone, large_zone, small_zone
+        image_zone = (0.50, image_top, 0.45, image_height)
+    return text_zone, image_zone
 
 
 def _add_user_image(
@@ -485,20 +471,18 @@ def _build_presentation_sync(
         title_text = topic if has_title else ""
         if has_title:
             title_zone = FIRST_SLIDE_TITLE_ZONE
-        first_image, second_image = _select_slide_image_pair(prepared_user_images, index)
-        if first_image is None and zone_key:
+        slide_image = _select_slide_image(prepared_user_images, index)
+        if slide_image is None and zone_key:
             fallback_image = Path(zone_key)
             if fallback_image.exists():
-                first_image = fallback_image
-                second_image = fallback_image
+                slide_image = fallback_image
         body_zone_for_text = body_zone if has_title else BODY_ZONE_NO_TITLE
-        large_image_zone: tuple[float, float, float, float] | None = None
-        small_image_zone: tuple[float, float, float, float] | None = None
-        if first_image is not None and second_image is not None:
-            preferred_layout = _pick_image_layout(first_image)
-            body_zone_for_text, large_image_zone, small_image_zone = _adjust_zones_for_dual_images(
+        image_zone: tuple[float, float, float, float] | None = None
+        if slide_image is not None:
+            preferred_layout = _pick_image_layout(slide_image)
+            body_zone_for_text, image_zone = _adjust_zones_for_single_image(
                 has_title=has_title,
-                preferred_large_layout=preferred_layout,
+                image_layout=preferred_layout,
             )
 
         if has_title:
@@ -562,19 +546,11 @@ def _build_presentation_sync(
             paragraph.alignment = PP_ALIGN.LEFT
             paragraph.space_after = Pt(5)
 
-        if first_image is not None and large_image_zone is not None:
+        if slide_image is not None and image_zone is not None:
             _add_user_image(
                 slide=slide,
-                image_path=first_image,
-                image_zone=large_image_zone,
-                slide_width=presentation.slide_width,
-                slide_height=presentation.slide_height,
-            )
-        if second_image is not None and small_image_zone is not None:
-            _add_user_image(
-                slide=slide,
-                image_path=second_image,
-                image_zone=small_image_zone,
+                image_path=slide_image,
+                image_zone=image_zone,
                 slide_width=presentation.slide_width,
                 slide_height=presentation.slide_height,
             )

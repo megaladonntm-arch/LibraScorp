@@ -541,7 +541,7 @@ async def _finalize_presentation_generation(
             max_model_attempts=settings.openrouter_max_model_attempts,
         )
 
-    min_images_required = max(2, slide_count * 2)
+    min_images_required = max(1, slide_count)
     if settings.auto_topic_images_enabled and len(image_paths) < min_images_required:
         missing_images = min(
             min_images_required - len(image_paths),
@@ -1911,7 +1911,7 @@ async def process_creator_names(message: Message, state: FSMContext) -> None:
         slide_images_temp_dir=None,
     )
     await state.set_state(PresentationForm.slide_images)
-    await message.answer(t(lang, "ask_slide_images", max_count=slide_count * 2))
+    await message.answer(t(lang, "ask_slide_images", max_count=slide_count))
 
 
 @router.message(PresentationForm.slide_images)
@@ -1924,7 +1924,7 @@ async def process_slide_images(message: Message, state: FSMContext) -> None:
     lang, _ = await _lang_and_tokens(message)
     data = await state.get_data()
     slide_count = int(data.get("slide_count", 0))
-    max_image_count = max(2, slide_count * 2)
+    max_image_count = max(1, slide_count)
     if slide_count <= 0:
         await _cleanup_slide_image_temp_dir(state)
         await state.clear()
